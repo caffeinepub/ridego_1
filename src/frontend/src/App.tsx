@@ -2,9 +2,10 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
+import { useNotifications } from "@/hooks/useNotifications";
 import {
   ArrowRight,
-  Bike,
+  Car,
   History,
   Home,
   LogOut,
@@ -18,6 +19,8 @@ import { toast } from "sonner";
 import ActiveRide from "./components/ActiveRide";
 import DriverHome from "./components/DriverHome";
 import type { AvailableRide } from "./components/DriverHome";
+import DriverRatingModal from "./components/DriverRatingModal";
+import NotificationCenter from "./components/NotificationCenter";
 import ProfilePage from "./components/ProfilePage";
 import RideBooking from "./components/RideBooking";
 import RideHistory from "./components/RideHistory";
@@ -28,7 +31,7 @@ export interface RideRequest {
   id: number;
   pickup: string;
   drop: string;
-  vehicleType: "Bike" | "Auto" | "Cab";
+  vehicleType: "Sports Car" | "Auto" | "Cab";
   fare: number;
   status: string;
 }
@@ -37,7 +40,7 @@ export interface RideHistoryEntry {
   id: number;
   pickup: string;
   drop: string;
-  vehicleType: "Bike" | "Auto" | "Cab";
+  vehicleType: "Sports Car" | "Auto" | "Cab";
   fare: number;
   status: "Completed" | "Cancelled" | "In Progress";
   rating: number | null;
@@ -54,7 +57,7 @@ type View =
   | "profile";
 
 type UserRole = "rider" | "driver" | null;
-type VehicleType = "Bike" | "Auto" | "Cab";
+type VehicleType = "Sports Car" | "Auto" | "Cab";
 
 // --- Mock seed ride history ---
 const SEED_HISTORY: RideHistoryEntry[] = [
@@ -62,7 +65,7 @@ const SEED_HISTORY: RideHistoryEntry[] = [
     id: 101,
     pickup: "Koramangala",
     drop: "Indiranagar",
-    vehicleType: "Bike",
+    vehicleType: "Sports Car",
     fare: 30,
     status: "Completed",
     rating: 5,
@@ -100,6 +103,9 @@ function getFromStorage<T>(key: string, fallback: T): T {
 }
 
 export default function App() {
+  const { notifications, unreadCount, notify, markAllRead, clearAll } =
+    useNotifications();
+
   const [currentView, setCurrentView] = useState<View>("home");
   const [userRole, setUserRole] = useState<UserRole>(() =>
     getFromStorage<UserRole>("ridego_role", null),
@@ -111,18 +117,25 @@ export default function App() {
     getFromStorage<string>("ridego_phone", ""),
   );
   const [driverVehicleType, setDriverVehicleType] =
-    useState<VehicleType>("Bike");
+    useState<VehicleType>("Sports Car");
   const [plateNumber] = useState<string>("KA 01 AB 1234");
 
   const [pickup, setPickup] = useState("");
   const [drop, setDrop] = useState("");
-  const [selectedVehicle, setSelectedVehicle] = useState<VehicleType>("Bike");
+  const [selectedVehicle, setSelectedVehicle] =
+    useState<VehicleType>("Sports Car");
   const [currentRide, setCurrentRide] = useState<RideRequest | null>(null);
   const [activeDriverRide, setActiveDriverRide] =
     useState<AvailableRide | null>(null);
   const [rideHistory, setRideHistory] =
     useState<RideHistoryEntry[]>(SEED_HISTORY);
   const [isOnline, setIsOnline] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<"Cash" | "UPI" | "Wallet">(
+    "Cash",
+  );
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const [pendingCompletedRide, setPendingCompletedRide] =
+    useState<RideHistoryEntry | null>(null);
 
   // Persist role/name/phone
   useEffect(() => {
@@ -155,6 +168,7 @@ export default function App() {
       setUserName(role === "rider" ? "Arjun Sharma" : "Suresh Kumar");
     if (!userPhone)
       setUserPhone(role === "rider" ? "98765XXXXX" : "87654XXXXX");
+    notify("Welcome to RideGo", `You are now signed in as a ${role}`, "info");
     navigate(role === "rider" ? "rider-home" : "driver-home");
   };
 
@@ -197,12 +211,47 @@ export default function App() {
         vehicleType: currentRide.vehicleType,
         fare: currentRide.fare,
         status: "Completed",
-        rating: 5,
+        rating: null,
         date: "Just now",
       };
-      setRideHistory((prev) => [completed, ...prev]);
+      setPendingCompletedRide(completed);
+      setShowRatingModal(true);
+    } else {
+      setCurrentRide(null);
+      setPickup("");
+      setDrop("");
+      navigate("rider-home");
+    }
+  };
+
+  const handleRatingSubmit = (rating: number, comment?: string) => {
+    if (pendingCompletedRide) {
+      const withRating: RideHistoryEntry = { ...pendingCompletedRide, rating };
+      setRideHistory((prev) => [withRating, ...prev]);
+      if (comment) {
+        // comment stored locally, could be extended to backend
+      }
     }
     setCurrentRide(null);
+    setPendingCompletedRide(null);
+    setShowRatingModal(false);
+    setPickup("");
+    setDrop("");
+    notify(
+      "Thanks for rating!",
+      `You rated your driver ${rating} star${rating > 1 ? "s" : ""}`,
+      "success",
+    );
+    navigate("rider-home");
+  };
+
+  const handleRatingSkip = () => {
+    if (pendingCompletedRide) {
+      setRideHistory((prev) => [pendingCompletedRide, ...prev]);
+    }
+    setCurrentRide(null);
+    setPendingCompletedRide(null);
+    setShowRatingModal(false);
     setPickup("");
     setDrop("");
     navigate("rider-home");
@@ -220,7 +269,7 @@ export default function App() {
       id: Date.now(),
       pickup: activeDriverRide?.pickup ?? "Unknown",
       drop: activeDriverRide?.drop ?? "Unknown",
-      vehicleType: activeDriverRide?.vehicleType ?? "Bike",
+      vehicleType: activeDriverRide?.vehicleType ?? "Sports Car",
       fare: activeDriverRide?.fare ?? 0,
       status: "Completed",
       rating: null,
@@ -289,9 +338,9 @@ export default function App() {
           >
             <div className="w-24 h-24 rounded-2xl bg-primary/20 border border-primary/30 backdrop-blur-sm flex items-center justify-center shadow-orange">
               <img
-                src="/assets/generated/ridego-logo-transparent.dim_120x120.png"
+                src="/assets/generated/ridego-sportscar-icon-transparent.dim_512x512.png"
                 alt="RideGo"
-                className="w-16 h-16 object-contain"
+                className="w-20 h-20 object-contain"
               />
             </div>
           </motion.div>
@@ -326,7 +375,7 @@ export default function App() {
           >
             {[
               { icon: Zap, label: "Fast" },
-              { icon: Bike, label: "Reliable" },
+              { icon: Car, label: "Reliable" },
               { icon: ArrowRight, label: "Affordable" },
             ].map(({ icon: Icon, label }) => (
               <div key={label} className="flex flex-col items-center gap-1">
@@ -352,7 +401,7 @@ export default function App() {
               onClick={() => handleSelectRole("rider")}
               className="w-full h-14 text-base font-bold bg-primary hover:bg-primary/90 text-white shadow-orange rounded-xl"
             >
-              <Bike size={20} className="mr-2" />I want to Ride
+              <Car size={20} className="mr-2" />I want to Ride
               <ArrowRight size={18} className="ml-auto" />
             </Button>
 
@@ -470,9 +519,9 @@ export default function App() {
           <div className="flex items-center gap-2 shrink-0">
             <div className="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center">
               <img
-                src="/assets/generated/ridego-logo-transparent.dim_120x120.png"
+                src="/assets/generated/ridego-sportscar-icon-transparent.dim_512x512.png"
                 alt="RideGo"
-                className="w-5 h-5 object-contain"
+                className="w-6 h-6 object-contain"
               />
             </div>
             <span className="font-black text-white text-lg leading-none tracking-tight">
@@ -509,6 +558,14 @@ export default function App() {
                 </span>
               </div>
             )}
+
+            {/* Notification Center */}
+            <NotificationCenter
+              notifications={notifications}
+              unreadCount={unreadCount}
+              onMarkAllRead={markAllRead}
+              onClearAll={clearAll}
+            />
 
             {/* Avatar */}
             <Avatar className="w-8 h-8 border border-white/20">
@@ -549,18 +606,22 @@ export default function App() {
                   drop={drop}
                   selectedVehicle={selectedVehicle}
                   rideHistory={rideHistory}
+                  paymentMethod={paymentMethod}
                   onPickupChange={setPickup}
                   onDropChange={setDrop}
                   onVehicleSelect={setSelectedVehicle}
                   onBookRide={handleBookRide}
+                  onPaymentMethodChange={setPaymentMethod}
                 />
               )}
 
               {currentView === "ride-booked" && currentRide && (
                 <RideBooking
                   currentRide={currentRide}
+                  paymentMethod={paymentMethod}
                   onCancel={handleRideCancelled}
                   onComplete={handleRideCompleted}
+                  onNotify={notify}
                 />
               )}
 
@@ -570,6 +631,7 @@ export default function App() {
                   isOnline={isOnline}
                   onToggleOnline={setIsOnline}
                   onAcceptRide={handleAcceptRide}
+                  onNotify={notify}
                 />
               )}
 
@@ -578,12 +640,17 @@ export default function App() {
                   ride={activeDriverRide}
                   onComplete={handleDriverRideComplete}
                   onCancel={handleDriverRideCancel}
+                  onNotify={notify}
+                  paymentMethod={paymentMethod}
                 />
               )}
 
               {/* SHARED VIEWS */}
               {currentView === "ride-history" && (
-                <RideHistory rideHistory={rideHistory} />
+                <RideHistory
+                  rideHistory={rideHistory}
+                  userRole={userRole ?? undefined}
+                />
               )}
 
               {currentView === "profile" && userRole && (
@@ -638,7 +705,16 @@ export default function App() {
         </div>
       </nav>
 
-      {/* Footer (in profile view only) */}
+      {/* Driver Rating Modal */}
+      <AnimatePresence>
+        {showRatingModal && pendingCompletedRide && (
+          <DriverRatingModal
+            driverName="Suresh Kumar"
+            onSubmit={handleRatingSubmit}
+            onSkip={handleRatingSkip}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -5,15 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import {
-  Bike,
-  Car,
-  ChevronRight,
-  Phone,
-  Shield,
-  Star,
-  User,
-} from "lucide-react";
+import { Car, ChevronRight, Phone, Shield, Star, User } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import type { RideHistoryEntry } from "../App";
@@ -22,7 +14,7 @@ interface ProfilePageProps {
   userRole: "rider" | "driver";
   userName: string;
   userPhone: string;
-  vehicleType?: "Bike" | "Auto" | "Cab";
+  vehicleType?: "Sports Car" | "Auto" | "Cab";
   plateNumber?: string;
   rideHistory: RideHistoryEntry[];
   onSave: (name: string, phone: string) => void;
@@ -73,7 +65,7 @@ export default function ProfilePage({
     }, 600);
   };
 
-  const VehicleIcon = vehicleType === "Bike" ? Bike : Car;
+  const VehicleIcon = Car;
 
   return (
     <div className="pb-24 space-y-4 view-transition">
@@ -221,7 +213,9 @@ export default function ProfilePage({
                 <VehicleIcon size={18} className="text-primary" />
               </div>
               <div className="flex-1">
-                <p className="text-sm font-semibold">{vehicleType || "Bike"}</p>
+                <p className="text-sm font-semibold">
+                  {vehicleType || "Sports Car"}
+                </p>
                 <p className="text-xs text-muted-foreground font-mono">
                   {plateNumber || "KA 01 AB 1234"}
                 </p>

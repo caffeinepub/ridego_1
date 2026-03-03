@@ -2,9 +2,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
+import type { NotificationType } from "@/hooks/useNotifications";
+import { useSoundEffects } from "@/hooks/useSoundEffects";
+import {
+  calculateAutoFare,
+  calculateCabFare,
+  calculateSportsCarFare,
+} from "@/utils/fareUtils";
 import {
   AlertCircle,
-  Bike,
   Car,
   ChevronRight,
   Clock,
@@ -19,10 +25,15 @@ export interface AvailableRide {
   rider: string;
   pickup: string;
   drop: string;
-  vehicleType: "Bike" | "Auto" | "Cab";
+  vehicleType: "Sports Car" | "Auto" | "Cab";
   fare: number;
   time: string;
+  distanceKm?: number;
 }
+
+const _sportsCarMockFare = calculateSportsCarFare(4.5);
+const _autoMockFare = calculateAutoFare(6.2);
+const _cabMockFare = calculateCabFare(9.8);
 
 const MOCK_RIDES: AvailableRide[] = [
   {
@@ -30,9 +41,10 @@ const MOCK_RIDES: AvailableRide[] = [
     rider: "Priya S.",
     pickup: "Koramangala, Bengaluru",
     drop: "Indiranagar, Bengaluru",
-    vehicleType: "Bike",
-    fare: 30,
+    vehicleType: "Sports Car",
+    fare: _sportsCarMockFare.totalFare,
     time: "2 min ago",
+    distanceKm: 4.5,
   },
   {
     id: 2,
@@ -40,8 +52,9 @@ const MOCK_RIDES: AvailableRide[] = [
     pickup: "HSR Layout, Bengaluru",
     drop: "Electronic City, Bengaluru",
     vehicleType: "Auto",
-    fare: 50,
+    fare: _autoMockFare.totalFare,
     time: "4 min ago",
+    distanceKm: 6.2,
   },
   {
     id: 3,
@@ -49,13 +62,14 @@ const MOCK_RIDES: AvailableRide[] = [
     pickup: "Whitefield, Bengaluru",
     drop: "MG Road, Bengaluru",
     vehicleType: "Cab",
-    fare: 80,
+    fare: _cabMockFare.totalFare,
     time: "6 min ago",
+    distanceKm: 9.8,
   },
 ];
 
 const VEHICLE_COLORS: Record<string, string> = {
-  Bike: "text-primary bg-primary/10 border-primary/20",
+  "Sports Car": "text-primary bg-primary/10 border-primary/20",
   Auto: "text-warning bg-warning/10 border-warning/20",
   Cab: "text-success bg-success/10 border-success/20",
 };
@@ -64,14 +78,40 @@ interface DriverHomeProps {
   isOnline: boolean;
   onToggleOnline: (v: boolean) => void;
   onAcceptRide: (ride: AvailableRide) => void;
+  onNotify?: (title: string, message: string, type?: NotificationType) => void;
 }
 
 export default function DriverHome({
   isOnline,
   onToggleOnline,
   onAcceptRide,
+  onNotify,
 }: DriverHomeProps) {
+  const { playNewRideRequest, playRideAccepted } = useSoundEffects();
+
+  const handleToggleOnline = (v: boolean) => {
+    onToggleOnline(v);
+    if (v) {
+      playNewRideRequest();
+      onNotify?.(
+        "You are Online",
+        "You can now receive ride requests",
+        "success",
+      );
+      // Notify about the first available ride request
+      if (MOCK_RIDES.length > 0) {
+        const first = MOCK_RIDES[0];
+        onNotify?.(
+          "New Ride Request",
+          `A rider needs a ${first.vehicleType} from ${first.pickup}`,
+          "info",
+        );
+      }
+    }
+  };
+
   const handleAccept = (ride: AvailableRide) => {
+    playRideAccepted();
     toast.success(`Ride accepted! Heading to ${ride.pickup}`);
     onAcceptRide(ride);
   };
@@ -116,7 +156,7 @@ export default function DriverHome({
           <Switch
             data-ocid="driver.online_toggle"
             checked={isOnline}
-            onCheckedChange={onToggleOnline}
+            onCheckedChange={handleToggleOnline}
             className="data-[state=checked]:bg-primary scale-125"
           />
         </div>
@@ -194,7 +234,7 @@ export default function DriverHome({
         ) : (
           <div className="space-y-3">
             {MOCK_RIDES.map((ride, idx) => {
-              const VehicleIcon = ride.vehicleType === "Bike" ? Bike : Car;
+              const VehicleIcon = Car;
               return (
                 <Card
                   key={ride.id}
@@ -231,9 +271,32 @@ export default function DriverHome({
                           <VehicleIcon size={9} className="mr-1" />
                           {ride.vehicleType}
                         </Badge>
-                        <span className="text-base font-bold text-primary">
-                          ₹{ride.fare}
-                        </span>
+                        <div className="text-right">
+                          <span className="text-base font-bold text-primary block">
+                            ₹{ride.fare}
+                          </span>
+                          {ride.distanceKm != null &&
+                            (() => {
+                              const calcFn =
+                                ride.vehicleType === "Sports Car"
+                                  ? calculateSportsCarFare
+                                  : ride.vehicleType === "Auto"
+                                    ? calculateAutoFare
+                                    : calculateCabFare;
+                              const { commission, driverEarnings } = calcFn(
+                                ride.distanceKm,
+                              );
+                              return (
+                                <span className="text-[10px] text-muted-foreground block leading-tight">
+                                  Net{" "}
+                                  <span className="text-success font-semibold">
+                                    ₹{driverEarnings}
+                                  </span>{" "}
+                                  after ₹{commission} commission
+                                </span>
+                              );
+                            })()}
+                        </div>
                       </div>
                     </div>
 

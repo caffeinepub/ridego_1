@@ -2,8 +2,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import type { NotificationType } from "@/hooks/useNotifications";
+import { useSoundEffects } from "@/hooks/useSoundEffects";
+import { calculateSportsCarFare } from "@/utils/fareUtils";
 import {
-  Bike,
   Car,
   CheckCircle,
   MapPin,
@@ -19,30 +21,50 @@ import type { AvailableRide } from "./DriverHome";
 
 interface ActiveRideProps {
   ride: AvailableRide;
+  paymentMethod?: "Cash" | "UPI" | "Wallet";
   onComplete: () => void;
   onCancel: () => void;
+  onNotify?: (title: string, message: string, type?: NotificationType) => void;
 }
 
 type RideStep = "Accepted" | "Started" | "Completed";
 
 const STEPS: RideStep[] = ["Accepted", "Started", "Completed"];
 
+const PAYMENT_BADGE_STYLE: Record<"Cash" | "UPI" | "Wallet", string> = {
+  Cash: "text-foreground border-border/60",
+  UPI: "text-[#a78bfa] border-[#a78bfa]/30 bg-[#a78bfa]/8",
+  Wallet: "text-[#60a5fa] border-[#60a5fa]/30 bg-[#60a5fa]/8",
+};
+
 export default function ActiveRide({
   ride,
+  paymentMethod = "Cash",
   onComplete,
   onCancel,
+  onNotify,
 }: ActiveRideProps) {
   const [step, setStep] = useState<RideStep>("Accepted");
+  const { playRideStarted, playRideCompleted, playRideCancelled } =
+    useSoundEffects();
 
   const stepIdx = STEPS.indexOf(step);
 
   const handleStart = () => {
     setStep("Started");
+    playRideStarted();
     toast("Ride started! Navigate to drop location 🗺️");
+    onNotify?.("Ride Started", "Navigate to drop location", "info");
   };
 
   const handleComplete = () => {
     setStep("Completed");
+    playRideCompleted();
+    onNotify?.(
+      "Ride Completed",
+      `You earned ₹${ride.fare} for this trip`,
+      "success",
+    );
     setTimeout(() => {
       toast.success(`Ride completed! ₹${ride.fare} earned 💰`);
       onComplete();
@@ -50,11 +72,13 @@ export default function ActiveRide({
   };
 
   const handleCancel = () => {
+    playRideCancelled();
     toast.error("Ride cancelled");
+    onNotify?.("Ride Cancelled", "The ride has been cancelled", "warning");
     onCancel();
   };
 
-  const VehicleIcon = ride.vehicleType === "Bike" ? Bike : Car;
+  const VehicleIcon = Car;
 
   const MOCK_RIDER = {
     name: ride.rider,
@@ -189,13 +213,38 @@ export default function ActiveRide({
                 {ride.vehicleType}
               </span>
             </div>
-            <Badge variant="outline" className="text-xs">
-              Cash
+            <Badge
+              variant="outline"
+              className={`text-xs ${PAYMENT_BADGE_STYLE[paymentMethod]}`}
+            >
+              {paymentMethod}
             </Badge>
-            <div className="text-right">
-              <p className="text-xs text-muted-foreground">Fare</p>
-              <p className="text-lg font-bold text-primary">₹{ride.fare}</p>
-            </div>
+            {ride.vehicleType === "Sports Car" ? (
+              (() => {
+                const distKm = ride.distanceKm ?? 3;
+                const { totalFare, commission, driverEarnings } =
+                  calculateSportsCarFare(distKm);
+                return (
+                  <div className="text-right">
+                    <p className="text-xs text-muted-foreground">Gross fare</p>
+                    <p className="text-lg font-bold text-primary">
+                      ₹{totalFare}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">
+                      Commission: -₹{commission}
+                    </p>
+                    <p className="text-xs font-semibold text-success">
+                      Net ₹{driverEarnings}
+                    </p>
+                  </div>
+                );
+              })()
+            ) : (
+              <div className="text-right">
+                <p className="text-xs text-muted-foreground">Fare</p>
+                <p className="text-lg font-bold text-primary">₹{ride.fare}</p>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

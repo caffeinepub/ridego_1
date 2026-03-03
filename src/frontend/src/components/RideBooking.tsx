@@ -2,8 +2,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import type { NotificationType } from "@/hooks/useNotifications";
+import { useSoundEffects } from "@/hooks/useSoundEffects";
 import {
-  Bike,
   Car,
   CheckCircle,
   Clock,
@@ -17,6 +18,7 @@ import {
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { RideRequest } from "../App";
+import UPIPayment from "./UPIPayment";
 
 interface MockDriver {
   name: string;
@@ -28,7 +30,7 @@ interface MockDriver {
 
 const MOCK_DRIVER: MockDriver = {
   name: "Suresh Kumar",
-  vehicleType: "Bike",
+  vehicleType: "Sports Car",
   plate: "KA 01 AB 1234",
   rating: 4.8,
   phone: "98765XXXXX",
@@ -44,49 +46,103 @@ type RideStatus = (typeof STATUS_STEPS)[number];
 
 interface RideBookingProps {
   currentRide: RideRequest;
+  paymentMethod: "Cash" | "UPI" | "Wallet";
   onCancel: () => void;
   onComplete: () => void;
+  onNotify?: (title: string, message: string, type?: NotificationType) => void;
 }
 
 export default function RideBooking({
   currentRide,
+  paymentMethod,
   onCancel,
   onComplete,
+  onNotify,
 }: RideBookingProps) {
   const [searching, setSearching] = useState(true);
   const [status, setStatus] = useState<RideStatus>("Pending");
   const [driver] = useState<MockDriver>(MOCK_DRIVER);
+  const [showUpiPayment, setShowUpiPayment] = useState(false);
+
+  const {
+    playRideAccepted,
+    playRideStarted,
+    playRideCompleted,
+    playRideCancelled,
+  } = useSoundEffects();
 
   useEffect(() => {
     const timer = setTimeout(() => {
       setSearching(false);
       setStatus("Accepted");
-      toast.success("Driver found! Suresh is on the way 🏍️");
+      playRideAccepted();
+      toast.success("Driver found! Suresh is on the way 🚗");
+      onNotify?.("Driver Found!", "Suresh Kumar is on the way", "success");
     }, 2500);
     return () => clearTimeout(timer);
-  }, []);
+  }, [onNotify, playRideAccepted]);
 
   const handleCancel = () => {
+    playRideCancelled();
     toast.error("Ride cancelled");
+    onNotify?.("Ride Cancelled", "Your ride has been cancelled", "warning");
     onCancel();
   };
 
   const handleComplete = () => {
     setStatus("Completed");
-    setTimeout(() => {
-      toast.success("Ride completed! Hope you had a great trip 🎉");
-      onComplete();
-    }, 800);
+    if (paymentMethod === "UPI") {
+      // Show UPI payment screen
+      setShowUpiPayment(true);
+    } else {
+      // Cash / Wallet: complete immediately
+      playRideCompleted();
+      onNotify?.("Ride Completed", "Hope you had a great trip!", "success");
+      setTimeout(() => {
+        toast.success("Ride completed! Hope you had a great trip 🎉");
+        onComplete();
+      }, 800);
+    }
+  };
+
+  const handleUpiSuccess = (transactionId: string, method: string) => {
+    playRideCompleted();
+    onNotify?.(
+      "Payment Successful",
+      `₹${currentRide.fare} paid via ${method}`,
+      "success",
+    );
+    toast.success(
+      `Payment of ₹${currentRide.fare} successful! Txn: ${transactionId}`,
+    );
+    onComplete();
+  };
+
+  const handleUpiBack = () => {
+    setShowUpiPayment(false);
+    setStatus("In Progress");
   };
 
   const handleStartRide = () => {
     setStatus("In Progress");
+    playRideStarted();
     toast("Ride started! Have a safe journey 🚀");
+    onNotify?.("Ride Started", "Your ride is now in progress", "info");
   };
 
   const currentStepIdx = STATUS_STEPS.indexOf(status);
 
-  const VehicleIcon = currentRide.vehicleType === "Bike" ? Bike : Car;
+  const VehicleIcon = Car;
+
+  if (showUpiPayment) {
+    return (
+      <UPIPayment
+        fare={currentRide.fare}
+        onSuccess={handleUpiSuccess}
+        onBack={handleUpiBack}
+      />
+    );
+  }
 
   return (
     <div className="pb-24 space-y-4 view-transition">

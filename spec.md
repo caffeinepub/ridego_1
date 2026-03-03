@@ -1,55 +1,31 @@
-# RideGo - Travel App (Rapido-like)
+# RideGo
 
 ## Current State
-New project. No existing code.
+- Pickup and drop inputs exist in RiderHome with a debounced geocode call (800ms) that calculates straight-line distance using Haversine formula
+- Distance badge and fare update after both fields have text and geocoding completes
+- No visual map shown between pickup and drop
 
 ## Requested Changes (Diff)
 
 ### Add
-- User authentication and role-based access (Rider vs Driver)
-- Ride booking flow: enter pickup and drop location, choose vehicle type (Bike, Auto, Cab)
-- Fare estimation based on vehicle type
-- Ride request management: request, accept, start, complete, cancel
-- Driver dashboard: view available ride requests, accept/reject rides
-- Rider dashboard: book a ride, track ride status
-- Ride history for both riders and drivers
-- Driver registration with vehicle details
-- Rating system for rides
+- Live route map panel below the pickup/drop inputs that appears as soon as both fields have content
+- Map uses OpenStreetMap tiles via Leaflet (react-leaflet) embedded in an iframe-free inline component
+- Shows pickup marker (green pin), drop marker (red pin), and a dashed route line between them
+- Map animates in with a smooth expand transition when both locations are set
+- Distance badge updates live as the user types (debounce already present at 800ms -- keep as-is)
 
 ### Modify
-- N/A (new project)
+- RiderHome: add RouteMap component below distance badge when both pickup and drop coords are resolved
+- Distance badge: show "Calculating..." spinner while geocoding, then live km result (already works -- confirm it fires on every keystroke change via the existing useEffect)
 
 ### Remove
-- N/A (new project)
+- Nothing removed
 
 ## Implementation Plan
-
-### Backend (Motoko)
-1. User profile management (name, phone, role: rider/driver)
-2. Driver registration with vehicle info (type, plate number)
-3. Ride data model: rideId, rider, driver, pickup, drop, vehicle type, status, fare, timestamp, rating
-4. Functions:
-   - registerDriver(vehicleType, plateNumber) -> Result
-   - bookRide(pickup, dropLocation, vehicleType) -> Result<RideId>
-   - getAvailableRides() -> [Ride] (for drivers)
-   - acceptRide(rideId) -> Result
-   - updateRideStatus(rideId, status) -> Result (start, complete, cancel)
-   - getRideHistory() -> [Ride]
-   - rateRide(rideId, rating) -> Result
-   - getMyProfile() -> Profile
-   - updateProfile(name, phone) -> Result
-
-### Frontend (React)
-1. Landing / Home page with role selection (I want to ride / I want to drive)
-2. Rider flow:
-   - Book ride page: enter pickup, drop, select vehicle type, see fare estimate
-   - Ride status page: show current ride status with driver details
-   - Ride history page
-3. Driver flow:
-   - Registration page: vehicle type, plate number
-   - Available rides feed: list of ride requests to accept
-   - Active ride page: show rider info, navigation actions (start/complete)
-   - Ride history page
-4. Shared:
-   - Profile page (name, phone, rating)
-   - Top navigation with role context
+1. Install react-leaflet and leaflet packages (already may be available; otherwise use dynamic OpenStreetMap embed via iframe or pure SVG fallback)
+2. Create RouteMapPanel component using Leaflet or an OSM static map tile approach:
+   - If react-leaflet available: render a small Leaflet map with TileLayer, Marker, and Polyline
+   - Fallback: use a static OSM URL embed in an <img> with bbox from coords
+3. In RiderHome, pass resolved pickup/drop coords to RouteMapPanel
+4. Animate map panel in/out with motion/react
+5. Add data-ocid="rider.route_map.card" to the map container

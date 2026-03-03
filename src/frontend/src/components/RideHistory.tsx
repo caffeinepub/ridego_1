@@ -2,7 +2,6 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import {
-  Bike,
   Car,
   CheckCircle,
   ChevronRight,
@@ -16,6 +15,7 @@ import type { RideHistoryEntry } from "../App";
 
 interface RideHistoryProps {
   rideHistory: RideHistoryEntry[];
+  userRole?: "rider" | "driver";
 }
 
 const STATUS_CONFIG: Record<
@@ -43,7 +43,10 @@ const STATUS_CONFIG: Record<
   },
 };
 
-export default function RideHistory({ rideHistory }: RideHistoryProps) {
+export default function RideHistory({
+  rideHistory,
+  userRole,
+}: RideHistoryProps) {
   const completedCount = rideHistory.filter(
     (r) => r.status === "Completed",
   ).length;
@@ -54,11 +57,24 @@ export default function RideHistory({ rideHistory }: RideHistoryProps) {
     .filter((r) => r.status === "Completed")
     .reduce((sum, r) => sum + r.fare, 0);
 
+  const ratedEntries = rideHistory.filter(
+    (r) => r.rating !== null && r.rating !== undefined,
+  );
+  const avgRating =
+    ratedEntries.length > 0
+      ? ratedEntries.reduce((sum, r) => sum + (r.rating ?? 0), 0) /
+        ratedEntries.length
+      : null;
+
+  const showAvgRating = userRole === "driver" && ratedEntries.length > 0;
+
   return (
     <div className="pb-24 space-y-5 view-transition">
       {/* Summary Stats */}
       {rideHistory.length > 0 && (
-        <div className="grid grid-cols-3 gap-3">
+        <div
+          className={`grid gap-3 ${showAvgRating ? "grid-cols-4" : "grid-cols-3"}`}
+        >
           <Card className="shadow-xs border-border/50">
             <CardContent className="p-3 text-center">
               <p className="text-base font-bold text-primary">
@@ -83,10 +99,25 @@ export default function RideHistory({ rideHistory }: RideHistoryProps) {
             <CardContent className="p-3 text-center">
               <p className="text-base font-bold text-success">₹{totalSpent}</p>
               <p className="text-[10px] text-muted-foreground mt-0.5">
-                Total Spent
+                {userRole === "driver" ? "Earned" : "Total Spent"}
               </p>
             </CardContent>
           </Card>
+          {showAvgRating && avgRating !== null && (
+            <Card
+              data-ocid="history.avg_rating_card"
+              className="shadow-xs border-border/50"
+            >
+              <CardContent className="p-3 text-center">
+                <p className="text-base font-bold text-warning">
+                  {avgRating.toFixed(1)} ★
+                </p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  Avg Rating
+                </p>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
@@ -119,7 +150,7 @@ export default function RideHistory({ rideHistory }: RideHistoryProps) {
         ) : (
           <div className="space-y-3">
             {rideHistory.map((ride, idx) => {
-              const VehicleIcon = ride.vehicleType === "Bike" ? Bike : Car;
+              const VehicleIcon = Car;
               const statusConfig = STATUS_CONFIG[ride.status];
               const StatusIcon = statusConfig?.icon ?? CheckCircle;
 
@@ -190,7 +221,7 @@ export default function RideHistory({ rideHistory }: RideHistoryProps) {
                         <Separator className="my-2" />
                         <div className="flex items-center justify-between">
                           <span className="text-xs text-muted-foreground">
-                            Your rating
+                            Driver rating
                           </span>
                           <div className="flex items-center gap-1">
                             {[1, 2, 3, 4, 5].map((star) => (

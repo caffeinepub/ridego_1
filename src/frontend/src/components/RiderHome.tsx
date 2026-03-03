@@ -4,53 +4,60 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import {
-  Bike,
+  calculateAutoFare,
+  calculateCabFare,
+  calculateSportsCarFare,
+} from "@/utils/fareUtils";
+import {
   Car,
   ChevronRight,
   Clock,
+  Heart,
+  Loader2,
   MapPin,
   Navigation,
   Star,
+  X,
   Zap,
 } from "lucide-react";
-import { useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { RideHistoryEntry, RideRequest } from "../App";
+
+function getISOWeekNumber(date: Date): number {
+  const d = new Date(
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
+  );
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+}
+
+function shouldShowWeeklyBanner(): boolean {
+  const currentWeek = `${new Date().getFullYear()}-W${getISOWeekNumber(new Date())}`;
+  const stored = localStorage.getItem("ridego_last_banner_week");
+  return stored !== currentWeek;
+}
+
+function dismissWeeklyBanner(): void {
+  const currentWeek = `${new Date().getFullYear()}-W${getISOWeekNumber(new Date())}`;
+  localStorage.setItem("ridego_last_banner_week", currentWeek);
+}
 
 interface RiderHomeProps {
   pickup: string;
   drop: string;
-  selectedVehicle: "Bike" | "Auto" | "Cab";
+  selectedVehicle: "Sports Car" | "Auto" | "Cab";
   rideHistory: RideHistoryEntry[];
+  paymentMethod: "Cash" | "UPI" | "Wallet";
   onPickupChange: (v: string) => void;
   onDropChange: (v: string) => void;
-  onVehicleSelect: (v: "Bike" | "Auto" | "Cab") => void;
+  onVehicleSelect: (v: "Sports Car" | "Auto" | "Cab") => void;
   onBookRide: (ride: RideRequest) => void;
+  onPaymentMethodChange: (method: "Cash" | "UPI" | "Wallet") => void;
 }
-
-const VEHICLES = [
-  {
-    type: "Bike" as const,
-    icon: Bike,
-    price: 30,
-    desc: "Quick & affordable",
-    eta: "2 min",
-  },
-  {
-    type: "Auto" as const,
-    icon: Car,
-    price: 50,
-    desc: "Comfortable 3-wheeler",
-    eta: "4 min",
-  },
-  {
-    type: "Cab" as const,
-    icon: Car,
-    price: 80,
-    desc: "AC & spacious",
-    eta: "6 min",
-  },
-];
 
 const STATUS_COLOR: Record<string, string> = {
   Completed: "bg-success/10 text-success border-success/20",
@@ -58,17 +65,321 @@ const STATUS_COLOR: Record<string, string> = {
   "In Progress": "bg-primary/10 text-primary border-primary/20",
 };
 
+const PAYMENT_METHODS: {
+  id: "Cash" | "UPI" | "Wallet";
+  label: string;
+  icon: string;
+}[] = [
+  { id: "Cash", label: "Cash", icon: "💵" },
+  { id: "UPI", label: "UPI", icon: "📲" },
+  { id: "Wallet", label: "Wallet", icon: "👛" },
+];
+
+// Haversine formula: straight-line km between two lat/lon points
+function haversineKm(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+async function geocode(
+  query: string,
+): Promise<{ lat: number; lon: number } | null> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`,
+    );
+    const data = await res.json();
+    if (data?.[0])
+      return {
+        lat: Number.parseFloat(data[0].lat),
+        lon: Number.parseFloat(data[0].lon),
+      };
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+interface Coords {
+  lat: number;
+  lon: number;
+}
+
+interface RouteMapPanelProps {
+  pickup: Coords;
+  drop: Coords;
+  distanceKm: number;
+  pickupLabel: string;
+  dropLabel: string;
+}
+
+function getMapZoom(distanceKm: number): number {
+  if (distanceKm < 2) return 14;
+  if (distanceKm < 5) return 13;
+  if (distanceKm < 10) return 12;
+  if (distanceKm < 20) return 11;
+  if (distanceKm < 50) return 10;
+  return 9;
+}
+
+function RouteMapPanel({
+  pickup,
+  drop,
+  distanceKm,
+  pickupLabel,
+  dropLabel,
+}: RouteMapPanelProps) {
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageError, setImageError] = useState(false);
+
+  const midLat = (pickup.lat + drop.lat) / 2;
+  const midLon = (pickup.lon + drop.lon) / 2;
+  const zoom = getMapZoom(distanceKm);
+
+  const mapUrl = `https://staticmap.openstreetmap.de/staticmap.php?center=${midLat},${midLon}&zoom=${zoom}&size=600x200&markers=${pickup.lat},${pickup.lon},red-pushpin|${drop.lat},${drop.lon},ltblue-pushpin`;
+
+  return (
+    <motion.div
+      data-ocid="rider.route_map.card"
+      initial={{ opacity: 0, y: -10, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -8, scale: 0.98 }}
+      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+      className="overflow-hidden rounded-xl border border-border/60 bg-muted/30 shadow-sm"
+    >
+      {/* Map image area */}
+      <div
+        className="relative w-full"
+        style={{ aspectRatio: "3/1", minHeight: 100 }}
+      >
+        {/* Skeleton shown while loading */}
+        {!imageLoaded && !imageError && (
+          <div className="absolute inset-0 bg-muted animate-pulse rounded-t-xl flex items-center justify-center">
+            <div className="flex flex-col items-center gap-2 text-muted-foreground">
+              <Loader2 size={18} className="animate-spin" />
+              <span className="text-xs">Loading map...</span>
+            </div>
+          </div>
+        )}
+        {imageError ? (
+          <div className="absolute inset-0 bg-muted/60 rounded-t-xl flex items-center justify-center">
+            <div className="flex flex-col items-center gap-1 text-muted-foreground">
+              <MapPin size={20} className="opacity-40" />
+              <span className="text-xs">Map unavailable</span>
+            </div>
+          </div>
+        ) : (
+          <img
+            src={mapUrl}
+            alt={`Route from ${pickupLabel} to ${dropLabel}`}
+            onLoad={() => setImageLoaded(true)}
+            onError={() => {
+              setImageError(true);
+              setImageLoaded(true);
+            }}
+            className={`w-full h-full object-cover rounded-t-xl transition-opacity duration-300 ${imageLoaded ? "opacity-100" : "opacity-0"}`}
+            style={{ display: "block" }}
+          />
+        )}
+      </div>
+
+      {/* Route summary row */}
+      <div className="flex items-center gap-2 px-3 py-2.5 bg-background/60 border-t border-border/40">
+        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          <span className="w-2 h-2 rounded-full bg-success shrink-0" />
+          <span className="text-xs text-foreground font-medium truncate">
+            {pickupLabel}
+          </span>
+        </div>
+        <div className="shrink-0 text-muted-foreground/60 text-[10px] font-bold">
+          →
+        </div>
+        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          <span className="w-2 h-2 rounded-full bg-destructive shrink-0" />
+          <span className="text-xs text-foreground font-medium truncate">
+            {dropLabel}
+          </span>
+        </div>
+        <div className="shrink-0 ml-1 px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-[10px] font-bold text-primary whitespace-nowrap">
+          {distanceKm} km
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 export default function RiderHome({
   pickup,
   drop,
   selectedVehicle,
   rideHistory,
+  paymentMethod,
   onPickupChange,
   onDropChange,
   onVehicleSelect,
   onBookRide,
+  onPaymentMethodChange,
 }: RiderHomeProps) {
   const [isLoading, setIsLoading] = useState(false);
+  const [isFetchingLocation, setIsFetchingLocation] = useState(false);
+  const [distanceKm, setDistanceKm] = useState<number>(
+    () => Math.round((Math.random() * 13 + 2) * 10) / 10,
+  );
+  const [isCalculatingDistance, setIsCalculatingDistance] = useState(false);
+  const [showBanner, setShowBanner] = useState(false);
+  const [pickupCoords, setPickupCoords] = useState<Coords | null>(null);
+  const [dropCoords, setDropCoords] = useState<Coords | null>(null);
+  const pickupRef = useRef<HTMLInputElement>(null);
+  const distanceDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
+  // Recalculate distance when both pickup and drop are filled
+  useEffect(() => {
+    // Clear coords if either input is cleared
+    if (!pickup.trim()) {
+      setPickupCoords(null);
+    }
+    if (!drop.trim()) {
+      setDropCoords(null);
+    }
+    if (!pickup.trim() || !drop.trim()) return;
+    if (distanceDebounceRef.current) clearTimeout(distanceDebounceRef.current);
+    distanceDebounceRef.current = setTimeout(async () => {
+      setIsCalculatingDistance(true);
+      const [resolvedPickup, resolvedDrop] = await Promise.all([
+        geocode(pickup.trim()),
+        geocode(drop.trim()),
+      ]);
+      if (resolvedPickup && resolvedDrop) {
+        const km = haversineKm(
+          resolvedPickup.lat,
+          resolvedPickup.lon,
+          resolvedDrop.lat,
+          resolvedDrop.lon,
+        );
+        setDistanceKm(Math.round(km * 10) / 10);
+        setPickupCoords(resolvedPickup);
+        setDropCoords(resolvedDrop);
+      } else {
+        setPickupCoords(null);
+        setDropCoords(null);
+      }
+      setIsCalculatingDistance(false);
+    }, 800);
+    return () => {
+      if (distanceDebounceRef.current)
+        clearTimeout(distanceDebounceRef.current);
+    };
+  }, [pickup, drop]);
+
+  const handleFetchLocation = () => {
+    if (!navigator.geolocation) {
+      toast.error("Geolocation is not supported by your browser");
+      return;
+    }
+    setIsFetchingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        try {
+          const res = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`,
+          );
+          const data = await res.json();
+          const address =
+            data.address?.road ||
+            data.address?.suburb ||
+            data.address?.neighbourhood ||
+            data.address?.city_district ||
+            data.address?.city ||
+            data.display_name ||
+            `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+          onPickupChange(address);
+          toast.success("Current location detected");
+        } catch {
+          onPickupChange(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
+          toast.success("Location set to GPS coordinates");
+        } finally {
+          setIsFetchingLocation(false);
+        }
+      },
+      (error) => {
+        setIsFetchingLocation(false);
+        if (error.code === error.PERMISSION_DENIED) {
+          toast.error(
+            "Location permission denied. Please allow location access.",
+          );
+        } else {
+          toast.error("Unable to fetch your location");
+        }
+      },
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  };
+
+  useEffect(() => {
+    setShowBanner(shouldShowWeeklyBanner());
+  }, []);
+
+  const handleDismissBanner = () => {
+    dismissWeeklyBanner();
+    setShowBanner(false);
+  };
+
+  const handleChooseRide = () => {
+    handleDismissBanner();
+    setTimeout(() => {
+      pickupRef.current?.focus();
+      pickupRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }, 150);
+  };
+
+  const sportsCarFareInfo = calculateSportsCarFare(distanceKm);
+  const autoFareInfo = calculateAutoFare(distanceKm);
+  const cabFareInfo = calculateCabFare(distanceKm);
+
+  const VEHICLES = [
+    {
+      type: "Sports Car" as const,
+      icon: Car,
+      price: sportsCarFareInfo.totalFare,
+      desc: "Quick & affordable",
+      eta: "2 min",
+      formula: "₹20 base + ₹5/km",
+    },
+    {
+      type: "Auto" as const,
+      icon: Car,
+      price: autoFareInfo.totalFare,
+      desc: "Comfortable 3-wheeler",
+      eta: "4 min",
+      formula: "₹30 base + ₹6/km",
+    },
+    {
+      type: "Cab" as const,
+      icon: Car,
+      price: cabFareInfo.totalFare,
+      desc: "AC & spacious",
+      eta: "6 min",
+      formula: "₹50 base + ₹10/km",
+    },
+  ];
 
   const handleBook = () => {
     if (!pickup.trim()) {
@@ -83,8 +394,14 @@ export default function RiderHome({
     setIsLoading(true);
     setTimeout(() => {
       setIsLoading(false);
-      const fare =
-        VEHICLES.find((v) => v.type === selectedVehicle)?.price ?? 30;
+      let fare: number;
+      if (selectedVehicle === "Sports Car") {
+        fare = calculateSportsCarFare(distanceKm).totalFare;
+      } else if (selectedVehicle === "Auto") {
+        fare = calculateAutoFare(distanceKm).totalFare;
+      } else {
+        fare = calculateCabFare(distanceKm).totalFare;
+      }
       onBookRide({
         id: Date.now(),
         pickup: pickup.trim(),
@@ -111,6 +428,82 @@ export default function RiderHome({
         </div>
       </div>
 
+      {/* Weekly Happy Customer Banner */}
+      <AnimatePresence>
+        {showBanner && (
+          <motion.div
+            data-ocid="rider.weekly_banner.card"
+            key="weekly-banner"
+            initial={{ opacity: 0, y: -16, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -12, scale: 0.97 }}
+            transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <div className="relative overflow-hidden rounded-2xl border border-amber-500/25 bg-gradient-to-br from-amber-500/15 via-orange-500/10 to-amber-600/5 shadow-[0_4px_24px_rgba(245,158,11,0.12)]">
+              {/* Decorative glow orbs */}
+              <div className="pointer-events-none absolute -top-6 -right-6 w-28 h-28 rounded-full bg-amber-400/20 blur-2xl" />
+              <div className="pointer-events-none absolute -bottom-4 -left-4 w-20 h-20 rounded-full bg-orange-500/15 blur-xl" />
+
+              {/* Dismiss button */}
+              <button
+                type="button"
+                data-ocid="rider.weekly_banner.close_button"
+                onClick={handleDismissBanner}
+                aria-label="Dismiss weekly message"
+                className="absolute top-3 right-3 z-10 w-7 h-7 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-all duration-200"
+              >
+                <X size={13} />
+              </button>
+
+              <div className="relative p-4 pr-10">
+                <div className="flex items-start gap-3">
+                  {/* Icon */}
+                  <motion.div
+                    animate={{ scale: [1, 1.15, 1] }}
+                    transition={{
+                      duration: 1.8,
+                      repeat: Number.POSITIVE_INFINITY,
+                      ease: "easeInOut",
+                    }}
+                    className="shrink-0 w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-[0_2px_10px_rgba(245,158,11,0.4)]"
+                  >
+                    <Heart
+                      size={18}
+                      className="text-white"
+                      fill="currentColor"
+                    />
+                  </motion.div>
+
+                  {/* Text */}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-amber-100 leading-tight mb-0.5">
+                      Happy to have you, Valued Rider! 🎉
+                    </p>
+                    <p className="text-xs text-amber-200/75 leading-relaxed">
+                      Thank you for riding with RideGo this week. Ready for your
+                      next journey?
+                    </p>
+                  </div>
+                </div>
+
+                {/* CTA */}
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    data-ocid="rider.weekly_banner.primary_button"
+                    onClick={handleChooseRide}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-[0_2px_12px_rgba(245,158,11,0.35)] hover:shadow-[0_4px_16px_rgba(245,158,11,0.45)] hover:from-amber-400 hover:to-orange-400 transition-all duration-200 active:scale-95"
+                  >
+                    <Zap size={12} />
+                    Choose Your Ride
+                  </button>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Book a Ride Card */}
       <Card className="shadow-card border-border/50">
         <CardContent className="p-4 space-y-3">
@@ -126,12 +519,27 @@ export default function RiderHome({
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-success"
               />
               <Input
+                ref={pickupRef}
                 data-ocid="rider.pickup_input"
                 value={pickup}
                 onChange={(e) => onPickupChange(e.target.value)}
                 placeholder="Enter pickup location"
-                className="pl-9 h-11 bg-muted/50 border-border/60 focus:border-primary focus:ring-primary/20"
+                className="pl-9 pr-11 h-11 bg-muted/50 border-border/60 focus:border-primary focus:ring-primary/20"
               />
+              <button
+                type="button"
+                data-ocid="rider.fetch_location_button"
+                onClick={handleFetchLocation}
+                disabled={isFetchingLocation}
+                title="Use current location"
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full bg-primary/10 hover:bg-primary/20 text-primary transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isFetchingLocation ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Navigation size={14} />
+                )}
+              </button>
             </div>
 
             <div className="relative flex items-center gap-2">
@@ -154,6 +562,41 @@ export default function RiderHome({
 
           <Separator />
 
+          {/* Distance display */}
+          {(pickup.trim() || drop.trim()) && (
+            <div className="flex items-center justify-center">
+              <div
+                data-ocid="rider.distance_badge"
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-xs font-semibold text-primary"
+              >
+                {isCalculatingDistance ? (
+                  <>
+                    <Loader2 size={11} className="animate-spin" />
+                    <span>Calculating distance...</span>
+                  </>
+                ) : (
+                  <>
+                    <Navigation size={11} />
+                    <span>{distanceKm} km</span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Route Map */}
+          <AnimatePresence>
+            {pickupCoords && dropCoords && !isCalculatingDistance && (
+              <RouteMapPanel
+                pickup={pickupCoords}
+                drop={dropCoords}
+                distanceKm={distanceKm}
+                pickupLabel={pickup.trim()}
+                dropLabel={drop.trim()}
+              />
+            )}
+          </AnimatePresence>
+
           {/* Vehicle Selection */}
           <div>
             <p className="text-xs text-muted-foreground font-medium mb-2 uppercase tracking-wide">
@@ -167,7 +610,7 @@ export default function RiderHome({
                   <button
                     type="button"
                     key={v.type}
-                    data-ocid={`rider.${v.type.toLowerCase()}_button`}
+                    data-ocid={`rider.${v.type === "Sports Car" ? "sportscar" : v.type.toLowerCase()}_button`}
                     onClick={() => onVehicleSelect(v.type)}
                     className={`
                       relative flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all duration-200 cursor-pointer
@@ -195,9 +638,47 @@ export default function RiderHome({
                     <span className="text-xs font-bold text-primary">
                       ₹{v.price}
                     </span>
-                    <span className="text-[10px] text-muted-foreground leading-tight text-center">
-                      ~{v.eta}
+                    <span className="text-[9px] text-muted-foreground leading-tight text-center">
+                      {v.formula}
                     </span>
+                    <span className="text-[9px] text-muted-foreground leading-tight text-center flex items-center gap-0.5">
+                      {isCalculatingDistance ? (
+                        <Loader2 size={9} className="animate-spin" />
+                      ) : (
+                        `~${distanceKm} km`
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Payment Method Selector */}
+          <div>
+            <p className="text-xs text-muted-foreground font-medium mb-2 uppercase tracking-wide">
+              Payment
+            </p>
+            <div className="flex gap-2">
+              {PAYMENT_METHODS.map((method) => {
+                const isActive = paymentMethod === method.id;
+                return (
+                  <button
+                    key={method.id}
+                    type="button"
+                    data-ocid={`rider.payment_${method.id.toLowerCase()}_tab`}
+                    onClick={() => onPaymentMethodChange(method.id)}
+                    className={`
+                      flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-full border-2 text-xs font-semibold transition-all duration-200
+                      ${
+                        isActive
+                          ? "border-primary bg-primary/15 text-primary shadow-[0_0_0_1px_rgba(var(--primary),0.2)]"
+                          : "border-border/50 bg-muted/40 text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                      }
+                    `}
+                  >
+                    <span>{method.icon}</span>
+                    <span>{method.label}</span>
                   </button>
                 );
               })}
