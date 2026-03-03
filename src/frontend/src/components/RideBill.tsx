@@ -8,6 +8,7 @@ import {
   CheckCircle,
   Download,
   MapPin,
+  MessageSquare,
   Navigation,
   Receipt,
   Wallet,
@@ -182,6 +183,39 @@ export default function RideBill({
 
     const text = encodeURIComponent(lines.join("\n"));
     window.open(`https://wa.me/?text=${text}`, "_blank");
+  }
+
+  function handleShareSMS() {
+    const lines: string[] = [
+      "RideGo Receipt",
+      `Receipt No: ${receiptNumber}`,
+      `Date: ${rideDate}`,
+      "",
+      "Route",
+      `From: ${pickup}`,
+      `To: ${drop}`,
+      `Distance: ${distanceKm} km`,
+      "",
+      "Fare Breakdown",
+      `Base fare (first 1 km): Rs.${baseFare}`,
+    ];
+    if (extraKm > 0) {
+      lines.push(
+        `Extra distance (${extraKm.toFixed(1)} km x Rs.${perKmRate}/km): Rs.${extraKmFare}`,
+      );
+    }
+    if (waitingCharge > 0) {
+      lines.push(`Waiting charges: Rs.${waitingCharge}`);
+    }
+    lines.push(`Total: Rs.${totalFare}`);
+    lines.push("");
+    lines.push(`Payment: ${paymentMethod}`);
+    if (transactionId) lines.push(`Txn ID: ${transactionId}`);
+    lines.push("");
+    lines.push("Powered by RideGo");
+
+    const body = encodeURIComponent(lines.join("\n"));
+    window.open(`sms:?body=${body}`, "_self");
   }
 
   return (
@@ -364,20 +398,30 @@ export default function RideBill({
       </p>
 
       {/* Action Buttons */}
-      <div className="grid grid-cols-2 gap-2 print-hide">
-        <Button
-          data-ocid="ride_bill.download_pdf_button"
-          variant="outline"
-          onClick={handleDownloadPdf}
-          className="h-11 text-sm font-semibold border-border hover:bg-muted rounded-xl flex items-center gap-2"
-        >
-          <Download size={15} />
-          Download PDF
-        </Button>
+      <div className="space-y-2 print-hide">
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            data-ocid="ride_bill.download_pdf_button"
+            variant="outline"
+            onClick={handleDownloadPdf}
+            className="h-11 text-sm font-semibold border-border hover:bg-muted rounded-xl flex items-center gap-2"
+          >
+            <Download size={15} />
+            Download PDF
+          </Button>
+          <Button
+            data-ocid="ride_bill.sms_share_button"
+            onClick={handleShareSMS}
+            className="h-11 text-sm font-semibold rounded-xl flex items-center gap-2 bg-sky-500 hover:bg-sky-600 text-white border-0"
+          >
+            <MessageSquare size={15} />
+            Share via SMS
+          </Button>
+        </div>
         <Button
           data-ocid="ride_bill.whatsapp_share_button"
           onClick={handleShareWhatsApp}
-          className="h-11 text-sm font-semibold rounded-xl flex items-center gap-2 bg-[#25D366] hover:bg-[#1ebe5d] text-white border-0"
+          className="w-full h-11 text-sm font-semibold rounded-xl flex items-center gap-2 bg-[#25D366] hover:bg-[#1ebe5d] text-white border-0"
         >
           <WhatsAppIcon size={15} />
           Share via WhatsApp

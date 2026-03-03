@@ -22,9 +22,15 @@ import {
   CAB_PER_KM_RATE,
   SPORTSCAR_BASE_FARE,
   SPORTSCAR_PER_KM_RATE,
+  calculateAutoFare,
+  calculateCabFare,
+  calculateSportsCarFare,
 } from "./utils/fareUtils";
 
 import ActiveRide from "./components/ActiveRide";
+import AdminLogin from "./components/AdminLogin";
+import AdminPanel from "./components/AdminPanel";
+import BlockDriverDialog from "./components/BlockDriverDialog";
 import DriverHome from "./components/DriverHome";
 import type { AvailableRide } from "./components/DriverHome";
 import DriverRatingModal from "./components/DriverRatingModal";
@@ -53,6 +59,8 @@ export interface RideHistoryEntry {
   drop: string;
   vehicleType: "Sports Car" | "Auto" | "Cab";
   fare: number;
+  commission?: number;
+  netEarnings?: number;
   status: "Completed" | "Cancelled" | "In Progress";
   rating: number | null;
   date: string;
@@ -75,7 +83,9 @@ type View =
   | "driver-home"
   | "driver-active"
   | "ride-history"
-  | "profile";
+  | "profile"
+  | "admin-login"
+  | "admin-panel";
 
 type UserRole = "rider" | "driver" | null;
 type VehicleType = "Sports Car" | "Auto" | "Cab";
@@ -161,8 +171,13 @@ export default function App() {
   const [pendingBillData, setPendingBillData] = useState<RideBillProps | null>(
     null,
   );
+  const [blockedDrivers, setBlockedDrivers] = useState<string[]>(() =>
+    getFromStorage<string[]>("ridego_blocked_drivers", []),
+  );
+  const [showBlockPrompt, setShowBlockPrompt] = useState(false);
+  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
 
-  // Persist role/name/phone
+  // Persist role/name/phone/blockedDrivers
   useEffect(() => {
     localStorage.setItem("ridego_role", JSON.stringify(userRole));
   }, [userRole]);
@@ -172,6 +187,12 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("ridego_phone", JSON.stringify(userPhone));
   }, [userPhone]);
+  useEffect(() => {
+    localStorage.setItem(
+      "ridego_blocked_drivers",
+      JSON.stringify(blockedDrivers),
+    );
+  }, [blockedDrivers]);
 
   // Navigate to correct dashboard when role is set
   useEffect(() => {
@@ -185,6 +206,16 @@ export default function App() {
   const navigate = useCallback((view: View) => {
     setCurrentView(view);
   }, []);
+
+  const handleAdminLogin = () => {
+    setIsAdminLoggedIn(true);
+    navigate("admin-panel");
+  };
+
+  const handleAdminLogout = () => {
+    setIsAdminLoggedIn(false);
+    navigate("home");
+  };
 
   // --- Role selection ---
   const handleSelectRole = (role: "rider" | "driver") => {
@@ -314,7 +345,6 @@ export default function App() {
       }
     }
     setCurrentRide(null);
-    setPendingCompletedRide(null);
     setShowRatingModal(false);
     setPickup("");
     setDrop("");
@@ -323,7 +353,34 @@ export default function App() {
       `You rated your driver ${rating} star${rating > 1 ? "s" : ""}`,
       "success",
     );
+    if (rating < 2) {
+      // Show block prompt before navigating; pendingCompletedRide is still set
+      setShowBlockPrompt(true);
+    } else {
+      setPendingCompletedRide(null);
+      navigate("rider-home");
+    }
+  };
+
+  const handleBlockDriver = (driverName: string) => {
+    setBlockedDrivers((prev) =>
+      prev.includes(driverName) ? prev : [...prev, driverName],
+    );
+    toast.error("Driver has been blocked");
+    setShowBlockPrompt(false);
+    setPendingCompletedRide(null);
     navigate("rider-home");
+  };
+
+  const handleDismissBlockPrompt = () => {
+    setShowBlockPrompt(false);
+    setPendingCompletedRide(null);
+    navigate("rider-home");
+  };
+
+  const handleUnblockDriver = (driverName: string) => {
+    setBlockedDrivers((prev) => prev.filter((d) => d !== driverName));
+    toast.success(`${driverName} has been unblocked`);
   };
 
   const handleRatingSkip = () => {
@@ -346,12 +403,33 @@ export default function App() {
   };
 
   const handleDriverRideComplete = () => {
+    const rideDistanceKm = activeDriverRide?.distanceKm ?? 3;
+    const vehicleType = activeDriverRide?.vehicleType ?? "Sports Car";
+
+    let commission = 0;
+    let netEarnings = 0;
+    if (vehicleType === "Sports Car") {
+      const calc = calculateSportsCarFare(rideDistanceKm);
+      commission = calc.commission;
+      netEarnings = calc.driverEarnings;
+    } else if (vehicleType === "Auto") {
+      const calc = calculateAutoFare(rideDistanceKm);
+      commission = calc.commission;
+      netEarnings = calc.driverEarnings;
+    } else {
+      const calc = calculateCabFare(rideDistanceKm);
+      commission = calc.commission;
+      netEarnings = calc.driverEarnings;
+    }
+
     const earned: RideHistoryEntry = {
       id: Date.now(),
       pickup: activeDriverRide?.pickup ?? "Unknown",
       drop: activeDriverRide?.drop ?? "Unknown",
-      vehicleType: activeDriverRide?.vehicleType ?? "Sports Car",
+      vehicleType,
       fare: activeDriverRide?.fare ?? 0,
+      commission,
+      netEarnings,
       status: "Completed",
       rating: null,
       date: "Just now",
@@ -388,6 +466,25 @@ export default function App() {
     : "?";
 
   // ---- Render helpers ----
+
+  // ADMIN screens (full-page, no regular shell)
+  if (currentView === "admin-login") {
+    return (
+      <>
+        <Toaster position="top-center" />
+        <AdminLogin onLogin={handleAdminLogin} />
+      </>
+    );
+  }
+
+  if (currentView === "admin-panel" && isAdminLoggedIn) {
+    return (
+      <>
+        <Toaster position="top-center" />
+        <AdminPanel onLogout={handleAdminLogout} />
+      </>
+    );
+  }
 
   // HOME screen
   if (currentView === "home") {
@@ -496,6 +593,17 @@ export default function App() {
               Drive
               <ArrowRight size={18} className="ml-auto opacity-40" />
             </Button>
+
+            <div className="flex justify-center pt-2">
+              <button
+                type="button"
+                data-ocid="home.admin_login_button"
+                onClick={() => navigate("admin-login")}
+                className="text-white/30 text-xs hover:text-white/60 transition-colors mt-2"
+              >
+                Admin Login
+              </button>
+            </div>
           </motion.div>
 
           <motion.p
@@ -587,6 +695,8 @@ export default function App() {
     "driver-active": "Active Ride",
     "ride-history": isRider ? "My Rides" : "My Trips",
     profile: "Profile",
+    "admin-login": "Admin Login",
+    "admin-panel": "Admin Panel",
   };
 
   return (
@@ -721,6 +831,7 @@ export default function App() {
                   onToggleOnline={setIsOnline}
                   onAcceptRide={handleAcceptRide}
                   onNotify={notify}
+                  isBlocked={blockedDrivers.includes(userName)}
                 />
               )}
 
@@ -752,6 +863,12 @@ export default function App() {
                   rideHistory={rideHistory}
                   onSave={handleSaveProfile}
                   onSwitchRole={handleSwitchRole}
+                  blockedDrivers={
+                    userRole === "rider" ? blockedDrivers : undefined
+                  }
+                  onUnblockDriver={
+                    userRole === "rider" ? handleUnblockDriver : undefined
+                  }
                 />
               )}
             </motion.div>
@@ -801,6 +918,17 @@ export default function App() {
             driverName="Suresh Kumar"
             onSubmit={handleRatingSubmit}
             onSkip={handleRatingSkip}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Block Driver Dialog (shown after a 1-star rating) */}
+      <AnimatePresence>
+        {showBlockPrompt && pendingCompletedRide && (
+          <BlockDriverDialog
+            driverName="Suresh Kumar"
+            onBlock={handleBlockDriver}
+            onCancel={handleDismissBlockPrompt}
           />
         )}
       </AnimatePresence>

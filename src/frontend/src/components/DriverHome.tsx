@@ -11,6 +11,7 @@ import {
 } from "@/utils/fareUtils";
 import {
   AlertCircle,
+  Ban,
   Car,
   ChevronRight,
   Clock,
@@ -79,6 +80,7 @@ interface DriverHomeProps {
   onToggleOnline: (v: boolean) => void;
   onAcceptRide: (ride: AvailableRide) => void;
   onNotify?: (title: string, message: string, type?: NotificationType) => void;
+  isBlocked?: boolean;
 }
 
 export default function DriverHome({
@@ -86,6 +88,7 @@ export default function DriverHome({
   onToggleOnline,
   onAcceptRide,
   onNotify,
+  isBlocked = false,
 }: DriverHomeProps) {
   const { playNewRideRequest, playRideAccepted } = useSoundEffects();
 
@@ -115,6 +118,33 @@ export default function DriverHome({
     toast.success(`Ride accepted! Heading to ${ride.pickup}`);
     onAcceptRide(ride);
   };
+
+  if (isBlocked) {
+    return (
+      <div
+        data-ocid="driver.restricted_banner"
+        className="pb-24 flex flex-col items-center justify-center min-h-[60vh] text-center px-4"
+      >
+        <div className="w-20 h-20 rounded-full bg-destructive/10 border-2 border-destructive/25 flex items-center justify-center mb-5">
+          <Ban size={36} className="text-destructive" />
+        </div>
+        <h2 className="text-2xl font-black text-foreground mb-2 tracking-tight">
+          Account Restricted
+        </h2>
+        <p className="text-muted-foreground text-sm leading-relaxed max-w-xs mb-6">
+          Your driver account has been restricted due to a low rating. Please
+          contact support to appeal.
+        </p>
+        <button
+          type="button"
+          disabled
+          className="px-6 py-3 rounded-xl font-semibold text-sm bg-muted text-muted-foreground cursor-not-allowed opacity-60 border border-border/50"
+        >
+          Contact Support
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="pb-24 space-y-5 view-transition">

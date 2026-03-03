@@ -1,5 +1,7 @@
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import {
   Car,
@@ -8,15 +10,19 @@ import {
   ChevronRight,
   ChevronUp,
   Clock,
+  Download,
   MapPin,
   Navigation,
+  Printer,
   Receipt,
+  Search,
   Star,
   Wallet,
+  X,
   XCircle,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { RideHistoryEntry } from "../App";
 
 interface RideHistoryProps {
@@ -79,19 +85,96 @@ function PaymentBadge({
   );
 }
 
+type PaymentFilter = "All" | "Cash" | "UPI" | "Wallet";
+type StatusFilter = "All" | "Completed" | "Cancelled";
+type DateFilter = "All" | "Today" | "Yesterday" | "This Week";
+
 export default function RideHistory({
   rideHistory,
   userRole,
 }: RideHistoryProps) {
   const [expandedRideId, setExpandedRideId] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>("All");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("All");
 
-  const completedCount = rideHistory.filter(
+  const paymentOptions: PaymentFilter[] = ["All", "Cash", "UPI", "Wallet"];
+  const statusOptions: StatusFilter[] = ["All", "Completed", "Cancelled"];
+  const dateOptions: DateFilter[] = ["All", "Today", "Yesterday", "This Week"];
+
+  // Filtered rides
+  const filteredRides = useMemo(() => {
+    return rideHistory.filter((ride) => {
+      // Search filter
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matches =
+          ride.pickup.toLowerCase().includes(q) ||
+          ride.drop.toLowerCase().includes(q) ||
+          ride.vehicleType.toLowerCase().includes(q) ||
+          String(ride.fare).includes(q);
+        if (!matches) return false;
+      }
+
+      // Payment filter
+      if (paymentFilter !== "All") {
+        const method =
+          ride.billDetails?.paymentMethod ?? ride.paymentMethod ?? "Cash";
+        if (method !== paymentFilter) return false;
+      }
+
+      // Status filter
+      if (statusFilter !== "All") {
+        if (ride.status !== statusFilter) return false;
+      }
+
+      // Date filter
+      if (dateFilter !== "All") {
+        const d = ride.date?.toLowerCase() ?? "";
+        if (
+          dateFilter === "Today" &&
+          !d.includes("today") &&
+          !d.includes("just now")
+        )
+          return false;
+        if (dateFilter === "Yesterday" && !d.includes("yesterday"))
+          return false;
+        if (dateFilter === "This Week") {
+          const isRecent =
+            d.includes("today") ||
+            d.includes("just now") ||
+            d.includes("yesterday") ||
+            d.includes("days ago") ||
+            d.includes("hour");
+          if (!isRecent) return false;
+        }
+      }
+
+      return true;
+    });
+  }, [rideHistory, searchQuery, paymentFilter, statusFilter, dateFilter]);
+
+  const hasActiveFilters =
+    searchQuery.trim() !== "" ||
+    paymentFilter !== "All" ||
+    statusFilter !== "All" ||
+    dateFilter !== "All";
+
+  const clearFilters = () => {
+    setSearchQuery("");
+    setPaymentFilter("All");
+    setStatusFilter("All");
+    setDateFilter("All");
+  };
+
+  const completedCount = filteredRides.filter(
     (r) => r.status === "Completed",
   ).length;
-  const cancelledCount = rideHistory.filter(
+  const cancelledCount = filteredRides.filter(
     (r) => r.status === "Cancelled",
   ).length;
-  const totalSpent = rideHistory
+  const totalSpent = filteredRides
     .filter((r) => r.status === "Completed")
     .reduce((sum, r) => sum + r.fare, 0);
 
@@ -105,6 +188,121 @@ export default function RideHistory({
       : null;
 
   const showAvgRating = userRole === "driver" && ratedEntries.length > 0;
+
+  // ── Export helpers ──────────────────────────────────────────────────────────
+  const handleExportCSV = () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const headers = [
+      "Ride#",
+      "Date",
+      "Vehicle",
+      "Pickup",
+      "Drop",
+      "Distance(km)",
+      "Fare(₹)",
+      "Payment",
+      "Status",
+    ];
+    const csvEscape = (val: string | number) => {
+      const s = String(val);
+      return s.includes(",") || s.includes('"') || s.includes("\n")
+        ? `"${s.replace(/"/g, '""')}"`
+        : s;
+    };
+    const rows = filteredRides.map((ride) =>
+      [
+        ride.id,
+        ride.date,
+        ride.vehicleType,
+        ride.pickup,
+        ride.drop,
+        ride.billDetails?.distanceKm ?? "-",
+        ride.fare,
+        ride.billDetails?.paymentMethod ?? ride.paymentMethod ?? "Cash",
+        ride.status,
+      ]
+        .map(csvEscape)
+        .join(","),
+    );
+    const csv = [headers.map(csvEscape).join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ridego-history-${today}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportPDF = () => {
+    const win = window.open("", "_blank");
+    if (!win) return;
+    const rows = filteredRides
+      .map(
+        (ride) => `
+        <tr>
+          <td>${ride.id}</td>
+          <td>${ride.date ?? "-"}</td>
+          <td>${ride.vehicleType}</td>
+          <td>${ride.pickup}</td>
+          <td>${ride.drop}</td>
+          <td>${ride.billDetails?.distanceKm ?? "-"}</td>
+          <td>₹${ride.fare}</td>
+          <td>${ride.billDetails?.paymentMethod ?? ride.paymentMethod ?? "Cash"}</td>
+          <td class="status-${ride.status.toLowerCase().replace(" ", "-")}">${ride.status}</td>
+        </tr>`,
+      )
+      .join("");
+    win.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>RideGo – Ride History</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #1a1a1a; padding: 32px; }
+    header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; border-bottom: 2px solid #f97316; padding-bottom: 16px; }
+    .logo { width: 40px; height: 40px; background: #f97316; border-radius: 10px; display: flex; align-items: center; justify-content: center; }
+    .logo span { color: #fff; font-weight: 900; font-size: 18px; }
+    h1 { font-size: 22px; font-weight: 800; color: #111; }
+    .subtitle { font-size: 12px; color: #888; margin-top: 2px; }
+    .meta { font-size: 11px; color: #aaa; margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    thead { background: #f97316; color: #fff; }
+    thead th { padding: 9px 10px; text-align: left; font-weight: 700; }
+    tbody tr:nth-child(even) { background: #fafafa; }
+    tbody td { padding: 8px 10px; border-bottom: 1px solid #eee; }
+    .status-completed { color: #16a34a; font-weight: 700; }
+    .status-cancelled { color: #dc2626; font-weight: 700; }
+    .status-in-progress { color: #f97316; font-weight: 700; }
+    footer { margin-top: 24px; font-size: 11px; color: #aaa; text-align: center; border-top: 1px solid #eee; padding-top: 12px; }
+    @media print { body { padding: 16px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo"><span>R</span></div>
+    <div>
+      <h1>RideGo</h1>
+      <div class="subtitle">Ride History Export</div>
+    </div>
+  </header>
+  <p class="meta">Exported on ${new Date().toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })} · ${filteredRides.length} ride${filteredRides.length !== 1 ? "s" : ""}</p>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>Date</th><th>Vehicle</th><th>Pickup</th><th>Drop</th>
+        <th>Dist (km)</th><th>Fare</th><th>Payment</th><th>Status</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <footer>Generated by RideGo · caffeine.ai</footer>
+  <script>window.onload = function(){ window.print(); }</script>
+</body>
+</html>`);
+    win.document.close();
+  };
 
   return (
     <div className="pb-24 space-y-5 view-transition">
@@ -159,13 +357,170 @@ export default function RideHistory({
         </div>
       )}
 
+      {/* Filter Panel */}
+      {rideHistory.length > 0 && (
+        <Card className="shadow-xs border-border/50">
+          <CardContent className="p-3 space-y-3">
+            {/* Search */}
+            <div className="relative">
+              <Search
+                size={14}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                data-ocid="history.search_input"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by location or vehicle..."
+                className="pl-9 h-9 text-xs bg-muted/50 border-border/60 focus:border-primary"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+
+            {/* Date filter chips */}
+            <div>
+              <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mb-1.5">
+                Date
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {dateOptions.map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    data-ocid={`history.date_filter.${opt.toLowerCase().replace(" ", "_")}`}
+                    onClick={() => setDateFilter(opt)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-all ${
+                      dateFilter === opt
+                        ? "bg-primary text-white border-primary shadow-sm"
+                        : "bg-muted/50 text-muted-foreground border-border/50 hover:border-primary/40 hover:text-foreground"
+                    }`}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Payment filter chips */}
+            <div>
+              <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mb-1.5">
+                Payment
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {paymentOptions.map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    data-ocid={`history.payment_filter.${opt.toLowerCase()}`}
+                    onClick={() => setPaymentFilter(opt)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-all ${
+                      paymentFilter === opt
+                        ? "bg-primary text-white border-primary shadow-sm"
+                        : "bg-muted/50 text-muted-foreground border-border/50 hover:border-primary/40 hover:text-foreground"
+                    }`}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Status filter chips */}
+            <div>
+              <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mb-1.5">
+                Status
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {statusOptions.map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    data-ocid={`history.status_filter.${opt.toLowerCase()}`}
+                    onClick={() => setStatusFilter(opt)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-all ${
+                      statusFilter === opt
+                        ? "bg-primary text-white border-primary shadow-sm"
+                        : "bg-muted/50 text-muted-foreground border-border/50 hover:border-primary/40 hover:text-foreground"
+                    }`}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Clear filters */}
+            {hasActiveFilters && (
+              <Button
+                data-ocid="history.clear_filters_button"
+                variant="ghost"
+                size="sm"
+                onClick={clearFilters}
+                className="w-full h-8 text-xs text-muted-foreground hover:text-foreground gap-1.5"
+              >
+                <X size={12} />
+                Clear all filters
+              </Button>
+            )}
+
+            {/* Export buttons — only when there are results */}
+            {filteredRides.length > 0 && (
+              <div className="border-t border-border/40 pt-2.5">
+                <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mb-2">
+                  Export
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    data-ocid="history.export_csv_button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleExportCSV}
+                    className="flex-1 h-8 text-xs gap-1.5 border-border/60 bg-muted/30 hover:bg-muted/60 hover:text-foreground text-muted-foreground"
+                  >
+                    <Download size={12} />
+                    Export CSV
+                  </Button>
+                  <Button
+                    data-ocid="history.export_pdf_button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleExportPDF}
+                    className="flex-1 h-8 text-xs gap-1.5 border-border/60 bg-muted/30 hover:bg-muted/60 hover:text-foreground text-muted-foreground"
+                  >
+                    <Printer size={12} />
+                    Export PDF
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Ride List */}
       <div>
-        <h3 className="font-semibold text-base text-foreground mb-3">
-          All Rides
-        </h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold text-base text-foreground">
+            {hasActiveFilters
+              ? `Results (${filteredRides.length})`
+              : "All Rides"}
+          </h3>
+          {hasActiveFilters && filteredRides.length !== rideHistory.length && (
+            <span className="text-xs text-muted-foreground">
+              of {rideHistory.length} total
+            </span>
+          )}
+        </div>
 
-        {rideHistory.length === 0 ? (
+        {filteredRides.length === 0 ? (
           <Card
             data-ocid="history.empty_state"
             className="border-dashed border-border/60"
@@ -178,16 +533,27 @@ export default function RideHistory({
                 />
               </div>
               <h4 className="font-semibold text-foreground mb-1">
-                No rides yet
+                {hasActiveFilters ? "No matching rides" : "No rides yet"}
               </h4>
               <p className="text-muted-foreground text-sm">
-                Your completed rides will appear here.
+                {hasActiveFilters
+                  ? "Try adjusting your filters to find rides."
+                  : "Your completed rides will appear here."}
               </p>
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="mt-3 text-xs text-primary font-semibold hover:underline"
+                >
+                  Clear filters
+                </button>
+              )}
             </CardContent>
           </Card>
         ) : (
           <div className="space-y-3">
-            {rideHistory.map((ride, idx) => {
+            {filteredRides.map((ride, idx) => {
               const VehicleIcon = Car;
               const statusConfig = STATUS_CONFIG[ride.status];
               const StatusIcon = statusConfig?.icon ?? CheckCircle;

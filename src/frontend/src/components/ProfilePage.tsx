@@ -5,7 +5,17 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Car, ChevronRight, Phone, Shield, Star, User } from "lucide-react";
+import {
+  Car,
+  ChevronRight,
+  Download,
+  Phone,
+  Shield,
+  ShieldOff,
+  Star,
+  TrendingUp,
+  User,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import type { RideHistoryEntry } from "../App";
@@ -19,6 +29,8 @@ interface ProfilePageProps {
   rideHistory: RideHistoryEntry[];
   onSave: (name: string, phone: string) => void;
   onSwitchRole: () => void;
+  blockedDrivers?: string[];
+  onUnblockDriver?: (name: string) => void;
 }
 
 export default function ProfilePage({
@@ -30,6 +42,8 @@ export default function ProfilePage({
   rideHistory,
   onSave,
   onSwitchRole,
+  blockedDrivers = [],
+  onUnblockDriver,
 }: ProfilePageProps) {
   const [name, setName] = useState(userName);
   const [phone, setPhone] = useState(userPhone);
@@ -203,6 +217,63 @@ export default function ProfilePage({
         </CardContent>
       </Card>
 
+      {/* Blocked Drivers (rider only) */}
+      {userRole === "rider" && (
+        <Card
+          data-ocid="profile.blocked_drivers.card"
+          className="shadow-card border-border/50"
+        >
+          <CardContent className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-full bg-destructive/10 flex items-center justify-center shrink-0">
+                <ShieldOff size={15} className="text-destructive" />
+              </div>
+              <h3 className="font-semibold text-base">Blocked Drivers</h3>
+              {blockedDrivers.length > 0 && (
+                <span className="ml-auto text-xs font-medium text-destructive bg-destructive/10 border border-destructive/20 rounded-full px-2 py-0.5">
+                  {blockedDrivers.length}
+                </span>
+              )}
+            </div>
+
+            {blockedDrivers.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-1">
+                No drivers blocked.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {blockedDrivers.map((name, idx) => (
+                  <div
+                    key={name}
+                    className="flex items-center justify-between gap-2 p-3 rounded-xl bg-muted/50 border border-border/40"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-full bg-destructive/10 flex items-center justify-center shrink-0">
+                        <span className="text-xs font-bold text-destructive">
+                          {name.charAt(0).toUpperCase()}
+                        </span>
+                      </div>
+                      <span className="text-sm font-medium text-foreground truncate">
+                        {name}
+                      </span>
+                    </div>
+                    <Button
+                      data-ocid={`profile.unblock_button.${idx + 1}`}
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onUnblockDriver?.(name)}
+                      className="shrink-0 h-8 px-3 text-xs font-semibold border-border/60 text-muted-foreground hover:text-foreground hover:border-border rounded-lg"
+                    >
+                      Unblock
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Driver Vehicle Info */}
       {userRole === "driver" && (
         <Card className="shadow-card border-border/50">
@@ -231,6 +302,113 @@ export default function ProfilePage({
           </CardContent>
         </Card>
       )}
+
+      {/* Driver Earnings Summary */}
+      {userRole === "driver" &&
+        (() => {
+          const completedDriverRides = rideHistory.filter(
+            (r) => r.status === "Completed",
+          );
+          const totalEarned = completedDriverRides.reduce(
+            (sum, r) => sum + (r.fare ?? 0),
+            0,
+          );
+          // Use stored commission/netEarnings if available, otherwise fall back to gross
+          const commission = completedDriverRides.reduce(
+            (sum, r) => sum + (r.commission ?? 0),
+            0,
+          );
+          const netEarnings = completedDriverRides.reduce(
+            (sum, r) => sum + (r.netEarnings ?? r.fare ?? 0),
+            0,
+          );
+
+          function handleDownloadEarningsPdf() {
+            document
+              .querySelector("[data-printable-earnings]")
+              ?.classList.add("printable-earnings");
+            window.print();
+            setTimeout(() => {
+              document
+                .querySelector("[data-printable-earnings]")
+                ?.classList.remove("printable-earnings");
+            }, 1000);
+          }
+
+          return (
+            <Card
+              data-ocid="driver.earnings_summary.card"
+              data-printable-earnings
+              className="shadow-card border-success/30 overflow-hidden"
+            >
+              <div className="h-1 bg-gradient-to-r from-success/70 via-success to-success/50" />
+              <CardContent className="p-4 space-y-4">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full bg-success/15 flex items-center justify-center">
+                    <TrendingUp size={16} className="text-success" />
+                  </div>
+                  <h3 className="font-semibold text-base">Earnings Summary</h3>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-muted/50 rounded-xl p-3 text-center">
+                    <p className="text-2xl font-black text-foreground">
+                      {completedRides}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Trips Completed
+                    </p>
+                  </div>
+                  <div className="bg-success/8 rounded-xl p-3 text-center border border-success/20">
+                    <p className="text-2xl font-black text-success">
+                      ₹{netEarnings}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Net Earnings
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between py-1.5 border-b border-border/40">
+                    <span className="text-sm text-muted-foreground">
+                      Total Earned (Gross)
+                    </span>
+                    <span className="text-sm font-semibold text-foreground">
+                      ₹{totalEarned}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between py-1.5 border-b border-border/40">
+                    <span className="text-sm text-muted-foreground">
+                      Platform Commission (₹1/km)
+                    </span>
+                    <span className="text-sm font-semibold text-destructive">
+                      - ₹{commission}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between py-1.5">
+                    <span className="text-sm font-bold text-foreground">
+                      Net Earnings
+                    </span>
+                    <span className="text-base font-black text-success">
+                      ₹{netEarnings}
+                    </span>
+                  </div>
+                </div>
+
+                <Button
+                  data-ocid="driver.earnings_pdf_button"
+                  variant="outline"
+                  onClick={handleDownloadEarningsPdf}
+                  className="w-full h-11 font-semibold border-success/40 text-success hover:bg-success/10 hover:border-success/60 rounded-xl flex items-center gap-2"
+                >
+                  <Download size={15} />
+                  Download Earnings PDF
+                </Button>
+              </CardContent>
+            </Card>
+          );
+        })()}
 
       <Separator />
 

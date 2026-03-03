@@ -15,6 +15,8 @@ import { Separator } from "@/components/ui/separator";
 import type { NotificationType } from "@/hooks/useNotifications";
 import { useSoundEffects } from "@/hooks/useSoundEffects";
 import {
+  calculateAutoFare,
+  calculateCabFare,
   calculateSportsCarFare,
   calculateWaitingCharge,
 } from "@/utils/fareUtils";
@@ -147,16 +149,25 @@ export default function ActiveRide({
     onNotify?.("Ride Started", "Navigate to drop location", "info");
   };
 
+  const getCommissionBreakdown = () => {
+    const distKm = ride.distanceKm ?? 3;
+    if (ride.vehicleType === "Auto") return calculateAutoFare(distKm);
+    if (ride.vehicleType === "Cab") return calculateCabFare(distKm);
+    return calculateSportsCarFare(distKm);
+  };
+
   const handleComplete = () => {
     setStep("Completed");
     playRideCompleted();
+    const { commission, driverEarnings } = getCommissionBreakdown();
+    const netWithWaiting = driverEarnings + waitingCharge;
     onNotify?.(
       "Ride Completed",
-      `You earned ₹${ride.fare} for this trip`,
+      `Net earnings: ₹${netWithWaiting} (commission ₹${commission} deducted)`,
       "success",
     );
     setTimeout(() => {
-      toast.success(`Ride completed! ₹${ride.fare} earned 💰`);
+      toast.success(`Ride completed! Net ₹${netWithWaiting} credited 💰`);
       onComplete();
     }, 1000);
   };
@@ -512,9 +523,43 @@ export default function ActiveRide({
             <CheckCircle size={32} className="text-success" />
           </div>
           <h3 className="font-bold text-lg">Ride Completed!</h3>
-          <p className="text-muted-foreground text-sm mt-1">
-            You earned ₹{ride.fare} for this trip
-          </p>
+          {(() => {
+            const { commission, driverEarnings } = getCommissionBreakdown();
+            const netWithWaiting = driverEarnings + waitingCharge;
+            const grossWithWaiting = ride.fare + waitingCharge;
+            return (
+              <div className="mt-3 mx-auto max-w-xs rounded-xl bg-success/8 border border-success/25 p-4 text-left space-y-1.5">
+                <div className="flex justify-between text-sm text-muted-foreground">
+                  <span>Gross Fare</span>
+                  <span className="font-medium text-foreground">
+                    ₹{grossWithWaiting}
+                  </span>
+                </div>
+                {waitingCharge > 0 && (
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>Waiting Charge</span>
+                    <span className="font-medium text-warning">
+                      +₹{waitingCharge}
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm text-muted-foreground">
+                  <span>Commission (₹1/km)</span>
+                  <span className="font-medium text-destructive">
+                    -₹{commission}
+                  </span>
+                </div>
+                <div className="border-t border-success/30 pt-1.5 flex justify-between">
+                  <span className="text-sm font-bold text-foreground">
+                    Net Earnings
+                  </span>
+                  <span className="text-base font-black text-success">
+                    ₹{netWithWaiting}
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
