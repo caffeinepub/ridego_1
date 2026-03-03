@@ -1,22 +1,40 @@
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import type { NotificationType } from "@/hooks/useNotifications";
 import { useSoundEffects } from "@/hooks/useSoundEffects";
-import { calculateSportsCarFare } from "@/utils/fareUtils";
+import {
+  calculateSportsCarFare,
+  calculateWaitingCharge,
+} from "@/utils/fareUtils";
 import {
   Car,
   CheckCircle,
+  Clock,
   MapPin,
+  MessageCircle,
   Navigation,
   Phone,
   Star,
+  Timer,
   User,
   XCircle,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import CallOverlay from "./CallOverlay";
+import ChatWindow from "./ChatWindow";
 import type { AvailableRide } from "./DriverHome";
 
 interface ActiveRideProps {
@@ -45,8 +63,80 @@ export default function ActiveRide({
   onNotify,
 }: ActiveRideProps) {
   const [step, setStep] = useState<RideStep>("Accepted");
+  const [waitingSeconds, setWaitingSeconds] = useState(0);
+  const [showChat, setShowChat] = useState(false);
+  const [showCall, setShowCall] = useState(false);
+  const waitingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  );
   const { playRideStarted, playRideCompleted, playRideCancelled } =
     useSoundEffects();
+
+  // Grace period: 120 seconds from when ride is accepted
+  const GRACE_PERIOD_SECONDS = 120;
+  const [graceSeconds, setGraceSeconds] = useState(0);
+  const graceIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
+
+  const graceRemaining = Math.max(0, GRACE_PERIOD_SECONDS - graceSeconds);
+  const withinGracePeriod = graceSeconds < GRACE_PERIOD_SECONDS;
+  const cancellationFee = Math.round(ride.fare * 0.2);
+
+  // Waiting timer: runs while step is "Accepted"
+  useEffect(() => {
+    if (step === "Accepted") {
+      waitingIntervalRef.current = setInterval(() => {
+        setWaitingSeconds((s) => s + 1);
+      }, 1000);
+    } else {
+      if (waitingIntervalRef.current) {
+        clearInterval(waitingIntervalRef.current);
+        waitingIntervalRef.current = null;
+      }
+    }
+    return () => {
+      if (waitingIntervalRef.current) {
+        clearInterval(waitingIntervalRef.current);
+        waitingIntervalRef.current = null;
+      }
+    };
+  }, [step]);
+
+  // Grace period countdown: starts when ride is accepted
+  useEffect(() => {
+    if (step === "Accepted") {
+      setGraceSeconds(0);
+      graceIntervalRef.current = setInterval(() => {
+        setGraceSeconds((s) => s + 1);
+      }, 1000);
+    } else {
+      if (graceIntervalRef.current) {
+        clearInterval(graceIntervalRef.current);
+        graceIntervalRef.current = null;
+      }
+    }
+    return () => {
+      if (graceIntervalRef.current) {
+        clearInterval(graceIntervalRef.current);
+        graceIntervalRef.current = null;
+      }
+    };
+  }, [step]);
+
+  const waitingMinutes = Math.floor(waitingSeconds / 60);
+  const waitingCharge = calculateWaitingCharge(waitingMinutes);
+
+  const formatWaitTime = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
+  const formatGraceCountdown = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
 
   const stepIdx = STEPS.indexOf(step);
 
@@ -71,9 +161,24 @@ export default function ActiveRide({
     }, 1000);
   };
 
-  const handleCancel = () => {
+  const handleCancelRequest = () => {
+    if (step === "Accepted") {
+      setShowCancelDialog(true);
+    } else {
+      confirmCancel();
+    }
+  };
+
+  const confirmCancel = () => {
+    setShowCancelDialog(false);
     playRideCancelled();
-    toast.error("Ride cancelled");
+    if (step === "Accepted" && !withinGracePeriod) {
+      toast.error(
+        `Ride cancelled. Cancellation fee of ₹${cancellationFee} applied.`,
+      );
+    } else {
+      toast.error("Ride cancelled");
+    }
     onNotify?.("Ride Cancelled", "The ride has been cancelled", "warning");
     onCancel();
   };
@@ -169,12 +274,26 @@ export default function ActiveRide({
                 {MOCK_RIDER.phone}
               </p>
             </div>
-            <button
-              type="button"
-              className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center hover:bg-primary/20 transition-colors"
-            >
-              <Phone size={16} className="text-primary" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                data-ocid="driver.chat_button"
+                onClick={() => setShowChat(true)}
+                className="w-10 h-10 rounded-full bg-success/10 flex items-center justify-center hover:bg-success/20 transition-colors"
+                title="Chat with rider"
+              >
+                <MessageCircle size={16} className="text-success" />
+              </button>
+              <button
+                type="button"
+                data-ocid="driver.call_button"
+                onClick={() => setShowCall(true)}
+                className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center hover:bg-primary/20 transition-colors"
+                title="Call rider"
+              >
+                <Phone size={16} className="text-primary" />
+              </button>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -224,17 +343,27 @@ export default function ActiveRide({
                 const distKm = ride.distanceKm ?? 3;
                 const { totalFare, commission, driverEarnings } =
                   calculateSportsCarFare(distKm);
+                const grossWithWaiting = totalFare + waitingCharge;
+                const netWithWaiting = driverEarnings + waitingCharge;
                 return (
                   <div className="text-right">
                     <p className="text-xs text-muted-foreground">Gross fare</p>
                     <p className="text-lg font-bold text-primary">
-                      ₹{totalFare}
+                      ₹{grossWithWaiting}
                     </p>
+                    {waitingCharge > 0 && (
+                      <p className="text-[10px] text-warning font-medium">
+                        +₹{waitingCharge} waiting
+                      </p>
+                    )}
                     <p className="text-[10px] text-muted-foreground">
                       Commission: -₹{commission}
                     </p>
                     <p className="text-xs font-semibold text-success">
-                      Net ₹{driverEarnings}
+                      Net ₹{netWithWaiting}
+                    </p>
+                    <p className="text-[10px] text-amber-500/80 font-medium">
+                      *Toll fees extra
                     </p>
                   </div>
                 );
@@ -242,10 +371,102 @@ export default function ActiveRide({
             ) : (
               <div className="text-right">
                 <p className="text-xs text-muted-foreground">Fare</p>
-                <p className="text-lg font-bold text-primary">₹{ride.fare}</p>
+                <p className="text-lg font-bold text-primary">
+                  ₹{ride.fare + waitingCharge}
+                </p>
+                {waitingCharge > 0 && (
+                  <p className="text-[10px] text-warning font-medium">
+                    +₹{waitingCharge} waiting
+                  </p>
+                )}
+                <p className="text-[10px] text-amber-500/80 font-medium">
+                  *Toll fees extra
+                </p>
               </div>
             )}
           </div>
+
+          {/* Grace period banner for driver */}
+          {step === "Accepted" && (
+            <div
+              data-ocid="driver.grace_period.card"
+              className={`mt-2 flex items-center justify-between rounded-lg px-3 py-2 border transition-colors duration-700 ${
+                withinGracePeriod
+                  ? "bg-success/8 border-success/25"
+                  : "bg-warning/8 border-warning/25"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <Clock
+                  size={13}
+                  className={`shrink-0 ${withinGracePeriod ? "text-success" : "text-warning"}`}
+                />
+                <div>
+                  {withinGracePeriod ? (
+                    <>
+                      <p className="text-xs font-semibold text-success leading-tight">
+                        Free cancellation window
+                      </p>
+                      <p className="text-[10px] text-muted-foreground leading-tight">
+                        No charge if cancelled within 2 min
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs font-semibold text-warning leading-tight">
+                        Cancellation fee applies
+                      </p>
+                      <p className="text-[10px] text-muted-foreground leading-tight">
+                        20% of fare = ₹{cancellationFee}
+                      </p>
+                    </>
+                  )}
+                </div>
+              </div>
+              {withinGracePeriod ? (
+                <span
+                  data-ocid="driver.grace_countdown.badge"
+                  className="text-xs font-bold px-2 py-0.5 rounded-full border text-success border-success/40 bg-success/10 tabular-nums"
+                >
+                  {formatGraceCountdown(graceRemaining)}
+                </span>
+              ) : (
+                <span
+                  data-ocid="driver.grace_expired.badge"
+                  className="text-xs font-bold px-2 py-0.5 rounded-full border text-warning border-warning/40 bg-warning/10"
+                >
+                  ₹{cancellationFee}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Waiting charge panel for driver */}
+          {step === "Accepted" && waitingSeconds > 0 && (
+            <div className="mt-2 flex items-center justify-between rounded-lg bg-warning/8 border border-warning/20 px-3 py-2">
+              <div className="flex items-center gap-2">
+                <Timer size={13} className="text-warning shrink-0" />
+                <div>
+                  <p className="text-xs font-semibold text-warning">
+                    Waiting: {formatWaitTime(waitingSeconds)}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground leading-tight">
+                    {waitingMinutes < 5
+                      ? `₹5 applies in ${5 - waitingMinutes} min`
+                      : waitingMinutes < 10
+                        ? `₹10 applies in ${10 - waitingMinutes} min`
+                        : "Max waiting charge applied"}
+                  </p>
+                </div>
+              </div>
+              <span
+                data-ocid="driver.waiting_charge.badge"
+                className={`text-xs font-bold px-2 py-0.5 rounded-full border ${waitingCharge > 0 ? "text-warning border-warning/40 bg-warning/10" : "text-muted-foreground border-border"}`}
+              >
+                {waitingCharge > 0 ? `+₹${waitingCharge}` : "Free"}
+              </span>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -272,12 +493,15 @@ export default function ActiveRide({
             </Button>
           )}
           <Button
-            onClick={handleCancel}
+            data-ocid="driver.cancel_button"
+            onClick={handleCancelRequest}
             variant="outline"
             className="w-full h-11 border-destructive/30 text-destructive hover:bg-destructive/5 hover:border-destructive/60"
           >
             <XCircle size={16} className="mr-2" />
-            Cancel Ride
+            {step === "Accepted" && !withinGracePeriod
+              ? `Cancel Ride (₹${cancellationFee} fee)`
+              : "Cancel Ride"}
           </Button>
         </div>
       )}
@@ -293,6 +517,71 @@ export default function ActiveRide({
           </p>
         </div>
       )}
+
+      {/* Chat Window */}
+      <ChatWindow
+        isOpen={showChat}
+        onClose={() => setShowChat(false)}
+        otherPartyName={MOCK_RIDER.name}
+        myRole="driver"
+      />
+
+      {/* Call Overlay */}
+      <CallOverlay
+        isOpen={showCall}
+        onClose={() => setShowCall(false)}
+        calleeName={MOCK_RIDER.name}
+      />
+
+      {/* Cancellation confirmation dialog */}
+      <AlertDialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
+        <AlertDialogContent data-ocid="driver.cancel.dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel Ride?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              {withinGracePeriod ? (
+                <div className="space-y-2">
+                  <p>You&apos;re within the free cancellation window.</p>
+                  <div className="flex items-center gap-2 rounded-lg bg-success/8 border border-success/25 px-3 py-2">
+                    <CheckCircle size={14} className="text-success shrink-0" />
+                    <span className="text-sm font-medium text-success">
+                      No charge — cancellation is free
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p>The free cancellation window has expired.</p>
+                  <div className="flex items-center gap-2 rounded-lg bg-warning/8 border border-warning/25 px-3 py-2">
+                    <XCircle size={14} className="text-warning shrink-0" />
+                    <span className="text-sm font-medium text-warning">
+                      A 20% fee of ₹{cancellationFee} will be charged
+                    </span>
+                  </div>
+                </div>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-ocid="driver.cancel.dialog.cancel_button">
+              Keep Ride
+            </AlertDialogCancel>
+            <AlertDialogAction
+              data-ocid="driver.cancel.dialog.confirm_button"
+              onClick={confirmCancel}
+              className={
+                withinGracePeriod
+                  ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  : "bg-warning text-warning-foreground hover:bg-warning/90"
+              }
+            >
+              {withinGracePeriod
+                ? "Cancel Ride (Free)"
+                : `Cancel Ride (₹${cancellationFee} fee)`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

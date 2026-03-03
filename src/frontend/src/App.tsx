@@ -15,6 +15,14 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import {
+  AUTO_BASE_FARE,
+  AUTO_PER_KM_RATE,
+  CAB_BASE_FARE,
+  CAB_PER_KM_RATE,
+  SPORTSCAR_BASE_FARE,
+  SPORTSCAR_PER_KM_RATE,
+} from "./utils/fareUtils";
 
 import ActiveRide from "./components/ActiveRide";
 import DriverHome from "./components/DriverHome";
@@ -22,6 +30,8 @@ import type { AvailableRide } from "./components/DriverHome";
 import DriverRatingModal from "./components/DriverRatingModal";
 import NotificationCenter from "./components/NotificationCenter";
 import ProfilePage from "./components/ProfilePage";
+import RideBill from "./components/RideBill";
+import type { RideBillProps } from "./components/RideBill";
 import RideBooking from "./components/RideBooking";
 import RideHistory from "./components/RideHistory";
 import RiderHome from "./components/RiderHome";
@@ -34,6 +44,7 @@ export interface RideRequest {
   vehicleType: "Sports Car" | "Auto" | "Cab";
   fare: number;
   status: string;
+  distanceKm?: number;
 }
 
 export interface RideHistoryEntry {
@@ -45,6 +56,16 @@ export interface RideHistoryEntry {
   status: "Completed" | "Cancelled" | "In Progress";
   rating: number | null;
   date: string;
+  paymentMethod?: "Cash" | "UPI" | "Wallet";
+  billDetails?: {
+    distanceKm: number;
+    baseFare: number;
+    extraKmFare: number;
+    waitingCharge: number;
+    totalFare: number;
+    paymentMethod: "Cash" | "UPI" | "Wallet";
+    transactionId?: string;
+  };
 }
 
 type View =
@@ -136,6 +157,10 @@ export default function App() {
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [pendingCompletedRide, setPendingCompletedRide] =
     useState<RideHistoryEntry | null>(null);
+  const [showBillModal, setShowBillModal] = useState(false);
+  const [pendingBillData, setPendingBillData] = useState<RideBillProps | null>(
+    null,
+  );
 
   // Persist role/name/phone
   useEffect(() => {
@@ -204,6 +229,35 @@ export default function App() {
 
   const handleRideCompleted = () => {
     if (currentRide) {
+      const distanceKm = currentRide.distanceKm ?? 3;
+      const extraKm = Math.max(0, distanceKm - 1);
+
+      let baseFare = SPORTSCAR_BASE_FARE;
+      let extraKmFare = Math.round(extraKm * SPORTSCAR_PER_KM_RATE);
+      if (currentRide.vehicleType === "Auto") {
+        baseFare = AUTO_BASE_FARE;
+        extraKmFare = Math.round(extraKm * AUTO_PER_KM_RATE);
+      } else if (currentRide.vehicleType === "Cab") {
+        baseFare = CAB_BASE_FARE;
+        extraKmFare = Math.round(extraKm * CAB_PER_KM_RATE);
+      }
+
+      // Waiting charge is embedded in currentRide.fare
+      const waitingCharge = Math.max(
+        0,
+        currentRide.fare - baseFare - extraKmFare,
+      );
+      const totalFare = currentRide.fare;
+
+      const billDetails = {
+        distanceKm,
+        baseFare,
+        extraKmFare,
+        waitingCharge,
+        totalFare,
+        paymentMethod: paymentMethod,
+      };
+
       const completed: RideHistoryEntry = {
         id: currentRide.id,
         pickup: currentRide.pickup,
@@ -213,15 +267,42 @@ export default function App() {
         status: "Completed",
         rating: null,
         date: "Just now",
+        paymentMethod,
+        billDetails,
       };
       setPendingCompletedRide(completed);
-      setShowRatingModal(true);
+
+      const now = new Date();
+      const rideDate = now.toLocaleString("en-IN", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      });
+
+      setPendingBillData({
+        vehicleType: currentRide.vehicleType,
+        pickup: currentRide.pickup,
+        drop: currentRide.drop,
+        distanceKm,
+        baseFare,
+        extraKmFare,
+        waitingCharge,
+        totalFare,
+        paymentMethod,
+        rideDate,
+        onDone: handleBillDone,
+      });
+      setShowBillModal(true);
     } else {
       setCurrentRide(null);
       setPickup("");
       setDrop("");
       navigate("rider-home");
     }
+  };
+
+  const handleBillDone = () => {
+    setShowBillModal(false);
+    setShowRatingModal(true);
   };
 
   const handleRatingSubmit = (rating: number, comment?: string) => {
@@ -615,15 +696,23 @@ export default function App() {
                 />
               )}
 
-              {currentView === "ride-booked" && currentRide && (
-                <RideBooking
-                  currentRide={currentRide}
-                  paymentMethod={paymentMethod}
-                  onCancel={handleRideCancelled}
-                  onComplete={handleRideCompleted}
-                  onNotify={notify}
-                />
-              )}
+              {currentView === "ride-booked" &&
+                currentRide &&
+                !showBillModal && (
+                  <RideBooking
+                    currentRide={currentRide}
+                    paymentMethod={paymentMethod}
+                    onCancel={handleRideCancelled}
+                    onComplete={handleRideCompleted}
+                    onNotify={notify}
+                  />
+                )}
+
+              {currentView === "ride-booked" &&
+                showBillModal &&
+                pendingBillData && (
+                  <RideBill {...pendingBillData} onDone={handleBillDone} />
+                )}
 
               {/* DRIVER VIEWS */}
               {currentView === "driver-home" && (

@@ -3,27 +3,68 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import { estimateETA, formatETA, getTrafficCondition } from "@/utils/etaUtils";
 import {
   calculateAutoFare,
   calculateCabFare,
   calculateSportsCarFare,
 } from "@/utils/fareUtils";
 import {
+  ArrowBigLeft,
+  ArrowBigRight,
+  ArrowRight,
+  ArrowUp,
+  Bike,
   Car,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Clock,
   Heart,
   Loader2,
   MapPin,
+  Merge,
   Navigation,
+  RotateCcw,
   Star,
   X,
   Zap,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { RideHistoryEntry, RideRequest } from "../App";
+
+// Custom Auto-rickshaw icon (3-wheeler)
+function AutoIcon({
+  size = 22,
+  className = "",
+}: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      role="img"
+      aria-label="Auto rickshaw"
+    >
+      <title>Auto rickshaw</title>
+      <path d="M3 13h13V8l-3-3H3v8z" />
+      <path d="M3 8h13" />
+      <path d="M13 5v3" />
+      <path d="M16 8h3l2 3v2h-5V8z" />
+      <circle cx="6" cy="16" r="2" />
+      <circle cx="18" cy="16" r="2" />
+    </svg>
+  );
+}
 
 function getISOWeekNumber(date: Date): number {
   const d = new Date(
@@ -123,6 +164,8 @@ interface RouteMapPanelProps {
   distanceKm: number;
   pickupLabel: string;
   dropLabel: string;
+  eta?: string;
+  trafficLabel?: "Light" | "Moderate" | "Heavy";
 }
 
 function getMapZoom(distanceKm: number): number {
@@ -134,12 +177,35 @@ function getMapZoom(distanceKm: number): number {
   return 9;
 }
 
+const TRAFFIC_PILL: Record<
+  "Light" | "Moderate" | "Heavy",
+  { bg: string; text: string; dot: string }
+> = {
+  Light: {
+    bg: "bg-success/10 border-success/25",
+    text: "text-success",
+    dot: "bg-success",
+  },
+  Moderate: {
+    bg: "bg-warning/10 border-warning/25",
+    text: "text-warning",
+    dot: "bg-warning",
+  },
+  Heavy: {
+    bg: "bg-destructive/10 border-destructive/25",
+    text: "text-destructive",
+    dot: "bg-destructive",
+  },
+};
+
 function RouteMapPanel({
   pickup,
   drop,
   distanceKm,
   pickupLabel,
   dropLabel,
+  eta,
+  trafficLabel,
 }: RouteMapPanelProps) {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
@@ -149,6 +215,8 @@ function RouteMapPanel({
   const zoom = getMapZoom(distanceKm);
 
   const mapUrl = `https://staticmap.openstreetmap.de/staticmap.php?center=${midLat},${midLon}&zoom=${zoom}&size=600x200&markers=${pickup.lat},${pickup.lon},red-pushpin|${drop.lat},${drop.lon},ltblue-pushpin`;
+
+  const trafficStyle = trafficLabel ? TRAFFIC_PILL[trafficLabel] : null;
 
   return (
     <motion.div
@@ -212,9 +280,241 @@ function RouteMapPanel({
             {dropLabel}
           </span>
         </div>
-        <div className="shrink-0 ml-1 px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-[10px] font-bold text-primary whitespace-nowrap">
-          {distanceKm} km
+        <div className="flex items-center gap-1.5 shrink-0">
+          <div className="px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-[10px] font-bold text-primary whitespace-nowrap">
+            {distanceKm} km
+          </div>
+          {trafficStyle && trafficLabel && (
+            <div
+              className={`flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold whitespace-nowrap ${trafficStyle.bg} ${trafficStyle.text}`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${trafficStyle.dot}`}
+              />
+              {trafficLabel}
+            </div>
+          )}
+          {eta && (
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-muted/60 border border-border/50 text-[10px] font-semibold text-foreground whitespace-nowrap">
+              <Clock size={9} />
+              {eta}
+            </div>
+          )}
         </div>
+      </div>
+    </motion.div>
+  );
+}
+
+// --- OSRM directions ---
+
+interface OsrmStep {
+  maneuver: {
+    type: string;
+    modifier?: string;
+  };
+  name: string;
+  distance: number;
+}
+
+function getManeuverIcon(type: string, modifier?: string) {
+  if (type === "turn") {
+    if (
+      modifier === "left" ||
+      modifier === "sharp left" ||
+      modifier === "slight left"
+    )
+      return ArrowBigLeft;
+    if (
+      modifier === "right" ||
+      modifier === "sharp right" ||
+      modifier === "slight right"
+    )
+      return ArrowBigRight;
+  }
+  if (type === "depart") return Navigation;
+  if (type === "arrive") return MapPin;
+  if (type === "roundabout" || type === "rotary") return RotateCcw;
+  if (type === "merge") return Merge;
+  if (type === "continue" || type === "new name") return ArrowUp;
+  if (type === "straight") return ArrowUp;
+  return ArrowRight;
+}
+
+function formatStepDistance(meters: number): string {
+  if (meters < 100) return "< 100 m";
+  if (meters < 1000) return `${Math.round(meters / 100) * 100} m`;
+  return `${(meters / 1000).toFixed(1)} km`;
+}
+
+interface DirectionsPanelProps {
+  pickup: Coords;
+  drop: Coords;
+}
+
+function DirectionsPanel({ pickup, drop }: DirectionsPanelProps) {
+  const [steps, setSteps] = useState<OsrmStep[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+    setError(false);
+
+    const url = `https://router.project-osrm.org/route/v1/driving/${pickup.lon},${pickup.lat};${drop.lon},${drop.lat}?steps=true&overview=false`;
+
+    fetch(url)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        const legs = data?.routes?.[0]?.legs ?? [];
+        const allSteps: OsrmStep[] = [];
+        for (const leg of legs) {
+          for (const step of leg.steps ?? []) {
+            allSteps.push(step);
+          }
+        }
+        setSteps(allSteps);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setError(true);
+          setIsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pickup.lat, pickup.lon, drop.lat, drop.lon]);
+
+  const MAX_DEFAULT = 8;
+  const visibleSteps = expanded ? steps : steps.slice(0, MAX_DEFAULT);
+  const hasMore = steps.length > MAX_DEFAULT;
+
+  return (
+    <motion.div
+      data-ocid="rider.directions.card"
+      initial={{ opacity: 0, y: -10, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -8, scale: 0.98 }}
+      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1], delay: 0.1 }}
+      className="overflow-hidden rounded-xl border border-border/60 bg-card/60 shadow-sm"
+    >
+      {/* Header */}
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-border/40">
+        <Navigation size={14} className="text-primary shrink-0" />
+        <span className="text-sm font-semibold text-foreground">
+          Directions
+        </span>
+        {!isLoading && !error && steps.length > 0 && (
+          <span className="ml-auto text-[10px] text-muted-foreground font-medium">
+            {steps.length} steps
+          </span>
+        )}
+      </div>
+
+      <div className="px-4 py-3 space-y-0">
+        {isLoading ? (
+          /* Loading skeleton */
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                data-ocid="rider.directions.loading_state"
+                className="flex items-center gap-3 animate-pulse"
+              >
+                <div className="w-6 h-6 rounded-full bg-muted shrink-0" />
+                <div className="w-6 h-6 rounded-md bg-muted shrink-0" />
+                <div className="flex-1 space-y-1.5">
+                  <div className="h-3 bg-muted rounded w-3/4" />
+                  <div className="h-2.5 bg-muted rounded w-1/3" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : error ? (
+          <p
+            data-ocid="rider.directions.error_state"
+            className="text-xs text-muted-foreground text-center py-2"
+          >
+            Directions unavailable
+          </p>
+        ) : steps.length === 0 ? (
+          <p className="text-xs text-muted-foreground text-center py-2">
+            No directions found
+          </p>
+        ) : (
+          <>
+            {visibleSteps.map((step, idx) => {
+              const Icon = getManeuverIcon(
+                step.maneuver.type,
+                step.maneuver.modifier,
+              );
+              const streetName = step.name || "Continue";
+              const modifier = step.maneuver.modifier
+                ? ` (${step.maneuver.modifier})`
+                : "";
+              const stepKey = `step-${idx}-${step.maneuver.type}-${step.name}`;
+              return (
+                <div
+                  key={stepKey}
+                  className="flex items-center gap-3 py-2 border-b border-border/20 last:border-0"
+                >
+                  {/* Step number */}
+                  <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                    <span className="text-[9px] font-bold text-primary">
+                      {idx + 1}
+                    </span>
+                  </div>
+                  {/* Icon */}
+                  <div className="w-7 h-7 rounded-lg bg-muted/60 flex items-center justify-center shrink-0">
+                    <Icon size={14} className="text-foreground/70" />
+                  </div>
+                  {/* Text */}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-foreground truncate">
+                      {streetName}
+                      {modifier && (
+                        <span className="text-muted-foreground font-normal">
+                          {modifier}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  {/* Distance */}
+                  <div className="shrink-0 text-[10px] text-muted-foreground font-medium">
+                    {formatStepDistance(step.distance)}
+                  </div>
+                </div>
+              );
+            })}
+
+            {hasMore && (
+              <button
+                type="button"
+                data-ocid="rider.directions.show_all_button"
+                onClick={() => setExpanded((prev) => !prev)}
+                className="w-full flex items-center justify-center gap-1.5 pt-2 text-xs font-semibold text-primary hover:text-primary/80 transition-colors"
+              >
+                {expanded ? (
+                  <>
+                    <ChevronUp size={13} />
+                    Show less
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown size={13} />
+                    Show all {steps.length} steps
+                  </>
+                )}
+              </button>
+            )}
+          </>
+        )}
       </div>
     </motion.div>
   );
@@ -354,21 +654,30 @@ export default function RiderHome({
   const autoFareInfo = calculateAutoFare(distanceKm);
   const cabFareInfo = calculateCabFare(distanceKm);
 
-  const VEHICLES = [
+  const trafficCondition = getTrafficCondition();
+
+  const VEHICLES: {
+    type: "Sports Car" | "Auto" | "Cab";
+    icon: React.ElementType;
+    price: number;
+    desc: string;
+    eta: string;
+    formula: string;
+  }[] = [
     {
       type: "Sports Car" as const,
-      icon: Car,
+      icon: Bike,
       price: sportsCarFareInfo.totalFare,
       desc: "Quick & affordable",
-      eta: "2 min",
+      eta: formatETA(estimateETA(distanceKm, "Sports Car")),
       formula: "₹20 base + ₹5/km",
     },
     {
       type: "Auto" as const,
-      icon: Car,
+      icon: AutoIcon,
       price: autoFareInfo.totalFare,
       desc: "Comfortable 3-wheeler",
-      eta: "4 min",
+      eta: formatETA(estimateETA(distanceKm, "Auto")),
       formula: "₹30 base + ₹6/km",
     },
     {
@@ -376,7 +685,7 @@ export default function RiderHome({
       icon: Car,
       price: cabFareInfo.totalFare,
       desc: "AC & spacious",
-      eta: "6 min",
+      eta: formatETA(estimateETA(distanceKm, "Cab")),
       formula: "₹50 base + ₹10/km",
     },
   ];
@@ -409,6 +718,7 @@ export default function RiderHome({
         vehicleType: selectedVehicle,
         fare,
         status: "Pending",
+        distanceKm,
       });
       toast.success("Searching for drivers...");
     }, 600);
@@ -514,32 +824,28 @@ export default function RiderHome({
           {/* Pickup & Drop */}
           <div className="space-y-2">
             <div className="relative">
-              <MapPin
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-success"
-              />
-              <Input
-                ref={pickupRef}
-                data-ocid="rider.pickup_input"
-                value={pickup}
-                onChange={(e) => onPickupChange(e.target.value)}
-                placeholder="Enter pickup location"
-                className="pl-9 pr-11 h-11 bg-muted/50 border-border/60 focus:border-primary focus:ring-primary/20"
-              />
               <button
                 type="button"
                 data-ocid="rider.fetch_location_button"
                 onClick={handleFetchLocation}
                 disabled={isFetchingLocation}
-                title="Use current location"
-                className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full bg-primary/10 hover:bg-primary/20 text-primary transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                title="Tap to use current location"
+                className="absolute left-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full bg-success/10 hover:bg-success/25 transition-colors disabled:opacity-60 disabled:cursor-not-allowed z-10"
               >
                 {isFetchingLocation ? (
-                  <Loader2 size={14} className="animate-spin" />
+                  <Loader2 size={14} className="animate-spin text-success" />
                 ) : (
-                  <Navigation size={14} />
+                  <MapPin size={14} className="text-success" />
                 )}
               </button>
+              <Input
+                ref={pickupRef}
+                data-ocid="rider.pickup_input"
+                value={pickup}
+                onChange={(e) => onPickupChange(e.target.value)}
+                placeholder="Tap green pin for current location"
+                className="pl-9 pr-4 h-11 bg-muted/50 border-border/60 focus:border-primary focus:ring-primary/20"
+              />
             </div>
 
             <div className="relative flex items-center gap-2">
@@ -587,13 +893,18 @@ export default function RiderHome({
           {/* Route Map */}
           <AnimatePresence>
             {pickupCoords && dropCoords && !isCalculatingDistance && (
-              <RouteMapPanel
-                pickup={pickupCoords}
-                drop={dropCoords}
-                distanceKm={distanceKm}
-                pickupLabel={pickup.trim()}
-                dropLabel={drop.trim()}
-              />
+              <>
+                <RouteMapPanel
+                  pickup={pickupCoords}
+                  drop={dropCoords}
+                  distanceKm={distanceKm}
+                  pickupLabel={pickup.trim()}
+                  dropLabel={drop.trim()}
+                  eta={formatETA(estimateETA(distanceKm, selectedVehicle))}
+                  trafficLabel={trafficCondition.label}
+                />
+                <DirectionsPanel pickup={pickupCoords} drop={dropCoords} />
+              </>
             )}
           </AnimatePresence>
 
@@ -640,6 +951,9 @@ export default function RiderHome({
                     </span>
                     <span className="text-[9px] text-muted-foreground leading-tight text-center">
                       {v.formula}
+                    </span>
+                    <span className="text-[9px] text-amber-500/80 leading-tight text-center font-medium">
+                      *Toll fees extra
                     </span>
                     <span className="text-[9px] text-muted-foreground leading-tight text-center flex items-center gap-0.5">
                       {isCalculatingDistance ? (

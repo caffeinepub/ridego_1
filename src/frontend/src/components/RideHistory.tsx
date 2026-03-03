@@ -4,13 +4,19 @@ import { Separator } from "@/components/ui/separator";
 import {
   Car,
   CheckCircle,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Clock,
   MapPin,
   Navigation,
+  Receipt,
   Star,
+  Wallet,
   XCircle,
 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { useState } from "react";
 import type { RideHistoryEntry } from "../App";
 
 interface RideHistoryProps {
@@ -43,10 +49,42 @@ const STATUS_CONFIG: Record<
   },
 };
 
+function generateReceiptNumber(id: number): string {
+  const num = (id * 31337) % 99999;
+  return `RG-2026-${String(Math.abs(num)).padStart(5, "0")}`;
+}
+
+function PaymentBadge({
+  method,
+}: { method?: "Cash" | "UPI" | "Wallet" | string }) {
+  if (method === "UPI") {
+    return (
+      <Badge className="bg-primary/15 text-primary border-primary/30 text-[10px] font-semibold px-1.5 py-0">
+        UPI
+      </Badge>
+    );
+  }
+  if (method === "Wallet") {
+    return (
+      <Badge className="bg-success/15 text-success border-success/30 text-[10px] font-semibold px-1.5 py-0">
+        <Wallet size={8} className="mr-1" />
+        Wallet
+      </Badge>
+    );
+  }
+  return (
+    <Badge className="bg-muted text-muted-foreground border-border text-[10px] font-semibold px-1.5 py-0">
+      Cash
+    </Badge>
+  );
+}
+
 export default function RideHistory({
   rideHistory,
   userRole,
 }: RideHistoryProps) {
+  const [expandedRideId, setExpandedRideId] = useState<number | null>(null);
+
   const completedCount = rideHistory.filter(
     (r) => r.status === "Completed",
   ).length;
@@ -153,6 +191,7 @@ export default function RideHistory({
               const VehicleIcon = Car;
               const statusConfig = STATUS_CONFIG[ride.status];
               const StatusIcon = statusConfig?.icon ?? CheckCircle;
+              const isExpanded = expandedRideId === ride.id;
 
               return (
                 <Card
@@ -245,15 +284,161 @@ export default function RideHistory({
                       </>
                     )}
 
-                    {/* Re-book button */}
-                    {ride.status === "Completed" && (
-                      <button
-                        type="button"
-                        className="mt-2 w-full flex items-center justify-center gap-1 text-xs text-primary font-medium py-1.5 rounded-lg hover:bg-primary/5 transition-colors"
-                      >
-                        Book again <ChevronRight size={12} />
-                      </button>
-                    )}
+                    {/* Actions row */}
+                    <div className="flex items-center gap-2 mt-2">
+                      {/* View Bill button for completed rides */}
+                      {ride.status === "Completed" && (
+                        <button
+                          type="button"
+                          data-ocid={`history.ride.bill_button.${idx + 1}`}
+                          onClick={() =>
+                            setExpandedRideId(isExpanded ? null : ride.id)
+                          }
+                          className="flex-1 flex items-center justify-center gap-1.5 text-xs text-primary font-semibold py-1.5 rounded-lg hover:bg-primary/8 transition-colors border border-primary/20"
+                        >
+                          <Receipt size={12} />
+                          {isExpanded ? "Hide Bill" : "View Bill"}
+                          {isExpanded ? (
+                            <ChevronUp size={12} />
+                          ) : (
+                            <ChevronDown size={12} />
+                          )}
+                        </button>
+                      )}
+
+                      {/* Re-book button */}
+                      {ride.status === "Completed" && (
+                        <button
+                          type="button"
+                          className="flex-1 flex items-center justify-center gap-1 text-xs text-muted-foreground font-medium py-1.5 rounded-lg hover:bg-muted/50 transition-colors"
+                        >
+                          Book again <ChevronRight size={12} />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Inline Bill Panel */}
+                    <AnimatePresence>
+                      {isExpanded && ride.status === "Completed" && (
+                        <motion.div
+                          key="bill-panel"
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: 0.22, ease: "easeOut" }}
+                          className="overflow-hidden"
+                        >
+                          <div className="mt-3 pt-3 border-t border-border/60">
+                            {/* Receipt header */}
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center gap-2">
+                                <Receipt size={13} className="text-primary" />
+                                <span className="text-xs font-bold text-foreground">
+                                  Ride Receipt
+                                </span>
+                              </div>
+                              <span className="text-[10px] font-mono text-muted-foreground">
+                                {generateReceiptNumber(ride.id)}
+                              </span>
+                            </div>
+
+                            {/* Bill breakdown */}
+                            <div className="bg-muted/40 rounded-lg p-3 space-y-1.5">
+                              {ride.billDetails ? (
+                                <>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs text-muted-foreground">
+                                      Base fare (1 km)
+                                    </span>
+                                    <span className="text-xs font-semibold text-foreground">
+                                      ₹{ride.billDetails.baseFare}
+                                    </span>
+                                  </div>
+                                  {ride.billDetails.extraKmFare > 0 && (
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-xs text-muted-foreground">
+                                        Extra distance (
+                                        {Math.max(
+                                          0,
+                                          ride.billDetails.distanceKm - 1,
+                                        ).toFixed(1)}{" "}
+                                        km)
+                                      </span>
+                                      <span className="text-xs font-semibold text-foreground">
+                                        ₹{ride.billDetails.extraKmFare}
+                                      </span>
+                                    </div>
+                                  )}
+                                  {ride.billDetails.waitingCharge > 0 && (
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-xs text-warning">
+                                        Waiting charges
+                                      </span>
+                                      <span className="text-xs font-semibold text-warning">
+                                        +₹{ride.billDetails.waitingCharge}
+                                      </span>
+                                    </div>
+                                  )}
+                                  <div className="flex items-center justify-between pt-1.5 border-t border-border/50">
+                                    <span className="text-xs font-bold text-foreground">
+                                      Distance
+                                    </span>
+                                    <span className="text-xs font-semibold text-foreground">
+                                      {ride.billDetails.distanceKm} km
+                                    </span>
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs text-muted-foreground">
+                                    Ride fare
+                                  </span>
+                                  <span className="text-xs font-semibold text-foreground">
+                                    ₹{ride.fare}
+                                  </span>
+                                </div>
+                              )}
+
+                              {/* Dashed divider */}
+                              <div className="border-t border-dashed border-border/60 pt-1.5 mt-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-foreground">
+                                    Total
+                                  </span>
+                                  <span className="text-sm font-black text-primary">
+                                    ₹{ride.fare}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Payment method */}
+                            <div className="flex items-center justify-between mt-2">
+                              <span className="text-[10px] text-muted-foreground">
+                                Payment
+                              </span>
+                              <PaymentBadge
+                                method={
+                                  ride.billDetails?.paymentMethod ??
+                                  ride.paymentMethod ??
+                                  "Cash"
+                                }
+                              />
+                            </div>
+                            {ride.billDetails?.transactionId && (
+                              <div className="flex items-center justify-between mt-1">
+                                <span className="text-[10px] text-muted-foreground">
+                                  Txn ID
+                                </span>
+                                <span className="text-[10px] font-mono text-success font-semibold">
+                                  {ride.billDetails.transactionId}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </CardContent>
                 </Card>
               );
